@@ -1,0 +1,222 @@
+"""
+Synchronous Report Processing (Legacy)
+For gradual migration from sync to async processing
+"""
+
+import structlog
+from datetime import datetime
+from typing import Dict, Any
+from prisma import Json
+
+from app.core.database import prisma
+from prisma import enums
+from app.services.openai_service import filter_clinical_relevance, analyze_coding_opportunities
+from app.services.comprehend_service import extract_icd10_codes, extract_snomed_codes, extract_medical_entities
+
+logger = structlog.get_logger(__name__)
+
+
+async def generate_report_sync(encounter_id: str) -> Dict[str, Any]:
+    """
+    Generate report synchronously (old behavior for gradual migration)
+
+    This function processes the report synchronously within the API request,
+    which can take 20-60 seconds. It's kept for backward compatibility during
+    the migration to async processing.
+
+    Args:
+        encounter_id: ID of the encounter to process
+
+    Returns:
+        dict: Generated report data
+
+    Raises:
+        Exception: If report generation fails
+    """
+    start_time = datetime.utcnow()
+
+    logger.info("Starting synchronous report generation", encounter_id=encounter_id)
+
+    try:
+        # Fetch encounter with all related data
+        encounter = await prisma.encounter.find_unique(
+            where={"id": encounter_id},
+            include={
+                "phiMapping": True,
+                "uploadedFiles": True
+            }
+        )
+
+        if not encounter:
+            raise ValueError(f"Encounter {encounter_id} not found")
+
+        if not encounter.phiMapping:
+            raise ValueError(f"No PHI mapping found for encounter {encounter_id}")
+
+        # Get de-identified text
+        deidentified_text = encounter.phiMapping.deidentifiedText
+
+        if not deidentified_text:
+            raise ValueError(f"No de-identified text found for encounter {encounter_id}")
+
+        # Step 1: Clinical relevance filtering (optional, may fail gracefully)
+        filtered_text = deidentified_text
+        try:
+            logger.info("Filtering clinically relevant text", encounter_id=encounter_id)
+            filtered_text = await filter_clinical_relevance(deidentified_text)
+        except Exception as e:
+            logger.warning(
+                "Clinical filtering failed, using original text",
+                encounter_id=encounter_id,
+                error=str(e)
+            )
+
+        # Step 2: Extract ICD-10 codes
+        extracted_icd10_codes = []
+        try:
+            logger.info("Extracting ICD-10 codes", encounter_id=encounter_id)
+            extracted_icd10_codes = await extract_icd10_codes(filtered_text)
+        except Exception as e:
+            logger.warning(
+                "ICD-10 extraction failed",
+                encounter_id=encounter_id,
+                error=str(e)
+            )
+
+        # Step 3: Extract SNOMED codes
+        extracted_snomed_codes = []
+        try:
+            logger.info("Extracting SNOMED codes", encounter_id=encounter_id)
+            extracted_snomed_codes = await extract_snomed_codes(filtered_text)
+        except Exception as e:
+            logger.warning(
+                "SNOMED extraction failed",
+                encounter_id=encounter_id,
+                error=str(e)
+            )
+
+        # Step 4: AI coding analysis
+        logger.info("Running AI coding analysis", encounter_id=encounter_id)
+
+        # Prepare context for AI
+        billed_codes = encounter.billedCptCodes or []
+
+        ai_analysis = await analyze_coding_opportunities(
+            clinical_text=filtered_text,
+            billed_codes=billed_codes,
+            extracted_icd10=extracted_icd10_codes,
+            extracted_snomed=extracted_snomed_codes
+        )
+
+        # Calculate processing time
+        end_time = datetime.utcnow()
+        processing_time_ms = int((end_time - start_time).total_seconds() * 1000)
+
+        # Prepare report data
+        report_data = {
+            "encounterId": encounter_id,
+            "status": enums.ReportStatus.COMPLETE,
+            "progressPercent": 100,
+            "currentStep": "complete",
+            "processingStartedAt": start_time,
+            "processingCompletedAt": end_time,
+            "processingTimeMs": processing_time_ms,
+
+            # Coding analysis results
+            "billedCodes": Json(ai_analysis.get("billed_codes", [])),
+            "suggestedCodes": Json(ai_analysis.get("suggested_codes", [])),
+            "additionalCodes": Json(ai_analysis.get("additional_codes", [])),
+            "uncapturedServices": Json(ai_analysis.get("uncaptured_services", [])),
+
+            # Code extraction results
+            "extractedIcd10Codes": Json(extracted_icd10_codes),
+            "extractedSnomedCodes": Json(extracted_snomed_codes),
+
+            # Quality analysis
+            "missingDocumentation": Json(ai_analysis.get("missing_documentation", [])),
+            "denialRisks": Json(ai_analysis.get("denial_risks", [])),
+            "rvuAnalysis": Json(ai_analysis.get("rvu_analysis", {})),
+            "modifierSuggestions": Json(ai_analysis.get("modifier_suggestions", [])),
+
+            # Revenue analysis
+            "incrementalRevenue": ai_analysis.get("incremental_revenue", 0.0),
+
+            # Metadata
+            "aiModel": "gpt-4o-mini",
+            "auditMetadata": Json(ai_analysis.get("audit_metadata", {})),
+        }
+
+        # Create or update report
+        existing_report = await prisma.report.find_first(
+            where={"encounterId": encounter_id}
+        )
+
+        if existing_report:
+            report = await prisma.report.update(
+                where={"id": existing_report.id},
+                data=report_data
+            )
+            logger.info(
+                "Report updated synchronously",
+                encounter_id=encounter_id,
+                report_id=report.id,
+                processing_time_ms=processing_time_ms
+            )
+        else:
+            report = await prisma.report.create(data=report_data)
+            logger.info(
+                "Report created synchronously",
+                encounter_id=encounter_id,
+                report_id=report.id,
+                processing_time_ms=processing_time_ms
+            )
+
+        return {
+            "report_id": report.id,
+            "status": "complete",
+            "processing_time_ms": processing_time_ms,
+            "mode": "sync"
+        }
+
+    except Exception as e:
+        logger.error(
+            "Synchronous report generation failed",
+            encounter_id=encounter_id,
+            error=str(e)
+        )
+        raise
+
+
+async def should_process_async(user_id: str) -> bool:
+    """
+    Determine if this report should be processed asynchronously
+
+    Uses ASYNC_ROLLOUT_PERCENTAGE to gradually roll out async processing.
+    Deterministic based on user ID to ensure consistent experience per user.
+
+    Args:
+        user_id: User ID to use for deterministic decision
+
+    Returns:
+        bool: True if should process async, False for sync
+    """
+    from app.core.config import settings
+
+    # If async is disabled, always use sync
+    if not settings.ENABLE_ASYNC_REPORTS:
+        return False
+
+    # If 100%, always async
+    if settings.ASYNC_ROLLOUT_PERCENTAGE >= 100:
+        return True
+
+    # If 0%, always sync
+    if settings.ASYNC_ROLLOUT_PERCENTAGE <= 0:
+        return False
+
+    # Deterministic selection based on user ID hash
+    # This ensures same user always gets same behavior
+    user_hash = hash(user_id)
+    user_percentage = abs(user_hash) % 100
+
+    return user_percentage < settings.ASYNC_ROLLOUT_PERCENTAGE

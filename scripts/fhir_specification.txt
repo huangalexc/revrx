@@ -1,0 +1,174 @@
+# FHIR Resource Relationship Specification for Coding Intelligence Pipeline
+
+## Overview
+
+This document defines the relationships between key **FHIR resources** used in the medical coding workflow.  
+It is intended for developers working with **synthetic FHIR R4 data** (e.g., Synthea) to simulate real-world EHR integration.  
+
+The goal is to clearly outline:
+1. Which FHIR resources are **required for each processing step** (PHI → ICD → SNOMED → CPT).
+2. How resources relate through **FHIR references** (e.g., Encounter, Condition, DocumentReference).
+3. How to construct the **input JSON payloads** that emulate real-world encounter data flow.
+
+---
+
+## 1. Primary Resources and Relationships
+
+| Resource | Purpose | Key Fields | References | Required for |
+|-----------|----------|-------------|-------------|---------------|
+| **Patient** | Core demographic record. | `id`, `name`, `identifier`, `birthDate`, `address` | Referenced by `Encounter`, `Condition`, `Procedure`, `Claim`. | 🔒 PHI detection |
+| **Encounter** | Represents a single clinical visit or episode of care. | `id`, `status`, `type`, `period.start`, `period.end`, `subject (Patient)` | Links to `Condition`, `Procedure`, `DocumentReference`, `Claim`. | 🧠 Central linking object for all processes |
+| **DocumentReference** | Stores clinical notes or uploaded reports. | `id`, `type`, `content.attachment.data` (Base64 encoded text), `context.encounter` | Linked to Encounter. | 🔒 PHI detection → 🧠 ICD & SNOMED inference |
+| **Condition** | Represents diagnoses or problems identified. | `code.coding` (SNOMED/ICD-10), `clinicalStatus`, `encounter`, `subject` | Linked to Encounter, Claim. | 🧠 ICD-10 inference |
+| **Procedure** | Represents performed actions (e.g., ear lavage, suture). | `code.coding` (SNOMED), `status`, `encounter`, `performedDateTime` | Linked to Encounter, Claim. | 🧠 SNOMED → CPT crosswalk |
+| **Observation** | Represents findings (vitals, symptoms, test results). | `code`, `value`, `encounter` | Linked to Encounter. | 🧩 Support for ICD/SNOMED inference context |
+| **Claim** | Represents billed codes (provider-submitted). | `id`, `diagnosis`, `procedure`, `provider`, `created`, `encounter` | References Encounter, Condition, Procedure. | 💬 Validation & comparison of LLM recommendations |
+| **ExplanationOfBenefit** | Represents payer adjudication results. | `id`, `claim`, `item`, `payment` | Optional, linked to Claim. | 🔍 Optional post-analysis |
+| **Provenance** | Metadata about creation/modification. | `target`, `recorded`, `agent` | Optional. | 🔐 Audit support only |
+
+---
+
+## 2. Processing Workflow by Step
+
+### Step 1: **PHI Detection**
+
+**Purpose:** Strip identifiers before NLP processing.  
+**Required Resources:**  
+- `Patient` (for name, address, identifiers, etc.)  
+- `Encounter` (for provider and location references)  
+- `DocumentReference.content.attachment.data` (raw clinical text)  
+
+**Fields to Mask:**  
+| Field | Resource | Example |
+|--------|-----------|----------|
+| Patient name | `Patient.name.text` | “John Smith” |
+| Address | `Patient.address.line` | “123 Main St” |
+| MRN / Identifier | `Patient.identifier.value` | “12345678” |
+| Provider name | `Encounter.participant.individual.display` | “Dr. A. Brown” |
+| Service date | `Encounter.period.start` | “2025-04-21” |
+
+**Output:**  
+→ `Censored Text` ready for relevance filtering.
+
+---
+
+### Step 2: **Clinical Relevance & Context Extraction (LLM)**
+
+**Purpose:** Extract assessment and plan sections, provider initials, and date of service.  
+**Required Resources:**  
+- `DocumentReference.content.attachment.data` (text source)  
+- `Encounter.period.start` (date validation)  
+- `Encounter.participant.individual.display` (provider reference)  
+
+**Output:**  
+→ `Relevant Text` (context-limited content for Comprehend Medical)  
+→ Provider initials & service date metadata.
+
+---
+
+### Step 3: **ICD-10 Inference**
+
+**Purpose:** Identify diagnostic codes from relevant text.  
+**Required Resources:**  
+- `Condition.code.coding` (reference ICD-10 or SNOMED)  
+- `Condition.encounter` (link to Encounter)  
+- `DocumentReference.content.attachment.data` (for inferred extraction when Condition is absent)  
+
+**Processing Logic:**  
+- Use Amazon Comprehend Medical `InferICD10CM` on `Relevant Text`.  
+- Cross-check or augment with existing `Condition` resources.  
+- Filter out low-confidence matches (<0.3) or irrelevant categories (`sign`, `negation`).  
+
+**Output:**  
+→ Filtered ICD-10 list associated with Encounter.
+
+---
+
+### Step 4: **SNOMED CT Inference**
+
+**Purpose:** Identify procedures and clinical findings from text.  
+**Required Resources:**  
+- `Procedure.code.coding` (SNOMED)  
+- `Procedure.encounter`  
+- `DocumentReference.content.attachment.data` (if inference needed)  
+
+**Processing Logic:**  
+- Use Amazon Comprehend Medical `InferSNOMEDCT`.  
+- Filter to `TEST_TREATMENT_PROCEDURE` and `MEDICAL_CONDITION` categories.  
+- Discard very low-confidence matches (<0.05) but retain uncertain procedures for LLM verification.  
+
+**Output:**  
+→ SNOMED codes with relevance flags and confidence values.
+
+---
+
+### Step 5: **SNOMED → CPT Crosswalk**
+
+**Purpose:** Map identified SNOMED procedure codes to billable CPT equivalents.  
+**Required Resources:**  
+- `Procedure.code.coding` (SNOMED source)  
+- External `SNOMED-to-CPT` crosswalk dataset (e.g., CMS mapping tables).  
+
+**Output:**  
+→ Candidate CPT list for LLM confirmation.
+
+---
+
+### Step 6: **LLM Code Recommendation**
+
+**Purpose:** Generate deterministic, context-aware ICD/CPT coding suggestions.  
+**Required Resources:**  
+- `Relevant Text` (from Step 2)  
+- Filtered ICD-10 list (from Step 3)  
+- Filtered SNOMED/CPT list (from Step 5)  
+- (Optional) `Claim.procedure` / `Claim.diagnosis` for comparison.  
+
+**Output:**  
+→ Final recommended ICD and CPT codes, encounter type, and confidence explanations.
+
+---
+
+## 3. Resource Relationship Diagram (Simplified)
+
+Patient
+└── Encounter
+├── DocumentReference (Clinical Notes)
+├── Condition (Diagnoses → ICD-10)
+├── Procedure (Performed Actions → SNOMED → CPT)
+├── Observation (Symptoms, Tests, Vitals)
+├── Claim (Billed Codes)
+└── ExplanationOfBenefit (Adjudication)
+
+**Crosswalk flow:**
+DocumentReference.text → DetectPHI → LLM Filter → InferICD10CM + InferSNOMEDCT
+→ SNOMED→CPT Crosswalk → LLM Code Suggester → Claim Reconciliation
+
+---
+
+## 4. Testing with Synthea Data
+
+**Recommended testing path:**
+1. Parse Synthea FHIR bundle into individual resources.  
+2. Identify a subset of `Encounter` IDs with linked:
+   - `DocumentReference`
+   - `Condition`
+   - `Procedure`
+   - `Claim`
+3. For each Encounter:
+   - Use `DocumentReference` text as input.
+   - Run full PHI → ICD → SNOMED pipeline.
+   - Compare inferred codes to existing `Claim` or `Condition` codes.
+4. Store results with Encounter ID as the primary key.
+
+---
+
+## 5. Developer Notes
+
+- Use **FHIR R4** JSON format for all parsing and mock API payloads.
+- Ensure `DocumentReference.content.attachment.data` is Base64-decoded before passing to NLP.
+- Maintain internal mapping between `Encounter.id` and `FilenameHash` for non-FHIR uploads.
+- Validate inferred ICD-10 and CPT against CMS’s current-year code sets.
+
+---
+
+**End of Document**

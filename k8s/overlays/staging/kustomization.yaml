@@ -1,0 +1,93 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: revrx-staging
+
+bases:
+  - ../../base
+
+nameSuffix: -staging
+
+commonLabels:
+  environment: staging
+
+patches:
+  # Reduce replicas for staging
+  - target:
+      kind: Deployment
+      name: backend
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: frontend
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: celery-worker
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+
+  # Update HPA for staging
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: backend-hpa
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+      - op: replace
+        path: /spec/maxReplicas
+        value: 3
+
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: frontend-hpa
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+      - op: replace
+        path: /spec/maxReplicas
+        value: 3
+
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: celery-worker-hpa
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+      - op: replace
+        path: /spec/maxReplicas
+        value: 5
+
+  # Update ingress for staging domain
+  - target:
+      kind: Ingress
+      name: revrx-ingress
+    patch: |-
+      - op: replace
+        path: /spec/tls/0/hosts
+        value:
+          - staging.revrx.example.com
+          - api-staging.revrx.example.com
+      - op: replace
+        path: /spec/rules/0/host
+        value: staging.revrx.example.com
+      - op: replace
+        path: /spec/rules/1/host
+        value: api-staging.revrx.example.com
+
+images:
+  - name: revrx-backend
+    newTag: staging-latest
+  - name: revrx-frontend
+    newTag: staging-latest

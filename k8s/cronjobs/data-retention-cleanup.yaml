@@ -1,0 +1,129 @@
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: data-retention-cleanup
+  namespace: revrx-production
+  labels:
+    app: revrx
+    component: data-retention
+spec:
+  # Run daily at 2 AM UTC
+  schedule: "0 2 * * *"
+
+  # Keep last 3 successful jobs and 1 failed job for debugging
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+
+  # If job runs too long, terminate after 1 hour
+  activeDeadlineSeconds: 3600
+
+  jobTemplate:
+    metadata:
+      labels:
+        app: revrx
+        component: data-retention
+    spec:
+      template:
+        metadata:
+          labels:
+            app: revrx
+            component: data-retention
+        spec:
+          restartPolicy: OnFailure
+
+          # Use service account with permissions to access secrets
+          serviceAccountName: revrx-backend
+
+          containers:
+          - name: retention-cleanup
+            image: revrx-backend:latest
+            imagePullPolicy: IfNotPresent
+
+            # Run retention cleanup script
+            command:
+            - python
+            - -m
+            - app.scripts.retention_cleanup
+
+            env:
+            # Database connection
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: revrx-secrets
+                  key: database-url
+
+            # AWS credentials for S3 deletion
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: revrx-secrets
+                  key: aws-access-key-id
+
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: revrx-secrets
+                  key: aws-secret-access-key
+
+            - name: AWS_REGION
+              value: "us-east-1"
+
+            - name: AWS_S3_BUCKET_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: revrx-config
+                  key: s3-bucket-name
+
+            # PHI encryption key
+            - name: PHI_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: revrx-secrets
+                  key: phi-encryption-key
+
+            # Data retention policy
+            - name: DATA_RETENTION_DAYS
+              value: "2555"  # 7 years
+
+            # Logging
+            - name: LOG_LEVEL
+              value: "INFO"
+
+            - name: APP_ENV
+              value: "production"
+
+            # Resource limits
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "500m"
+
+            # Security context
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 1000
+              readOnlyRootFilesystem: true
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+
+          # Use image pull secrets if using private registry
+          imagePullSecrets:
+          - name: revrx-registry-secret
+---
+# ConfigMap for data retention settings
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: data-retention-config
+  namespace: revrx-production
+data:
+  retention-days: "2555"  # 7 years
+  cleanup-schedule: "0 2 * * *"  # Daily at 2 AM UTC
+  max-batch-size: "100"  # Maximum encounters to delete per run

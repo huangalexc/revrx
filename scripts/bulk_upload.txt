@@ -1,0 +1,88 @@
+# Feature: Bulk Upload and File Traceability
+
+## Overview
+This feature enables users to upload multiple clinical notes simultaneously while maintaining traceability from each uploaded file to its processed outputs (redacted text and coding report). It is designed to integrate seamlessly with the existing HIPAA-compliant workflow: file upload → PHI removal → text extraction → LLM coding analysis → suggested codes output.
+
+---
+
+## Feature Details
+
+### 1. Bulk Upload
+- **Description:** Users can select and upload multiple clinical note files at once.
+- **Implementation:** 
+  - Extend the current file upload component to support multi-file selection.
+  - Each file is submitted individually to the backend but processed asynchronously.
+  - Batch-level progress tracking is optional (e.g., "3 of 5 files processed").
+- **Output/UI:** 
+  - Progress indicator for each file.
+  - Completion status for each file individually.
+
+---
+
+### 2. Unique File Identification
+- **Description:** Assign a unique identifier (UUID) to each uploaded file to maintain traceability.
+- **Implementation:** 
+  - Generate a UUID when the file is uploaded (server-side preferred for consistency).
+  - Store UUID in both S3 metadata and the application database.
+- **Metadata Example:**
+  ```json
+  {
+    "file_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "user_id": "user_12345",
+    "original_filename": "note_2025-09-03.pdf",
+    "upload_timestamp": "2025-10-03T14:22:00Z",
+    "processing_status": "pending",
+    "redacted_file_s3_path": "s3://bucket/redacted/f47ac10b-58cc-4372-a567-0e02b2c3d479.txt",
+    "report_file_s3_path": "s3://bucket/reports/f47ac10b-58cc-4372-a567-0e02b2c3d479.pdf"
+  }
+
+---
+
+### 4. Duplicate Detection
+- **Description:** Each uploaded file is checked against previously uploaded files for the same user to determine if it is a duplicate.
+- **Implementation:**
+  - Compute a **hash of the file contents** (e.g., SHA-256) at upload.
+  - Compare this hash against hashes of all previously uploaded files for that user.
+  - Optional: Also compare original filename and file size for additional safety.
+- **Outcome:** If a match is found, the system flags the file as a duplicate.
+
+---
+
+### 5. User Notification
+- **Description:** Notify the user that the file they are trying to upload has already been uploaded.
+- **UI Implementation:**
+  - Display a clear message:  
+    *“This file appears to have been previously uploaded on [Date/Time]. Do you want to skip, replace, or process as a new file?”*
+  - Provide actionable buttons: `Skip`, `Replace`, `Process as New`.
+
+---
+
+### 6. Handling Options
+- **Skip:** The duplicate file is not uploaded or processed; the user moves on to other files in bulk upload.  
+- **Replace:** The new file overwrites the previous upload, retaining the same `file_id`.  
+- **Process as New:** Assign a **new UUID** to the file and process it independently (useful if updates were made to the file content).
+
+---
+
+### 6. Metadata and Traceability
+- **Description:** Duplicate detection integrates with the existing `file_id` and `batch_id` system.
+- **Implementation:**
+  - Maintain `file_hash` in the database for all uploads.
+  - Track user choice (Skip/Replace/Process as New) in metadata.
+  - Ensure all downstream features (redaction, LLM coding analysis, report generation) are correctly linked to the chosen file handling option.
+
+---
+
+### 7. Implementation Notes
+- Hashing ensures detection without storing PHI.
+- Comparison is performed server-side before processing to avoid unnecessary compute or storage.
+- Works seamlessly with both single and bulk uploads.
+
+---
+
+### Acceptance Criteria
+1. Duplicate files are detected using a hash comparison.
+2. User is notified with clear options when a duplicate is detected.
+3. User can choose to `Skip`, `Replace`, or `Process as New`.
+4. System correctly handles each choice while maintaining proper `file_id` tracking.
+5. Duplicate detection is HIPAA-compliant, storing only non-PHI metadata for comparison.

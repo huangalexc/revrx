@@ -1,0 +1,85 @@
+version: '3.9'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: revrx_postgres
+    environment:
+      POSTGRES_USER: revrx
+      POSTGRES_PASSWORD: revrx_dev_password
+      POSTGRES_DB: revrx_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U revrx"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for Celery
+  redis:
+    image: redis:7-alpine
+    container_name: revrx_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: revrx_backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://revrx:revrx_dev_password@postgres:5432/revrx_db
+      REDIS_URL: redis://redis:6379/0
+      APP_ENV: development
+      APP_DEBUG: "true"
+      LOG_LEVEL: INFO
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app
+      - ./prisma:/app/prisma
+    command: sh -c "prisma generate && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  # Celery Worker (for background tasks)
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: revrx_celery_worker
+    environment:
+      DATABASE_URL: postgresql://revrx:revrx_dev_password@postgres:5432/revrx_db
+      REDIS_URL: redis://redis:6379/0
+      APP_ENV: development
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app
+    command: celery -A app.tasks.celery worker --loglevel=info
+
+volumes:
+  postgres_data:
+  redis_data:

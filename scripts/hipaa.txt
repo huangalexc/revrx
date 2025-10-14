@@ -1,0 +1,47 @@
+# Feature: HIPAA-compliant note processing and storage
+
+**Goal:** Ensure sensitive PHI is not stored unnecessarily, while allowing post-facto coding analysis.
+
+**Description:**  
+The system will process each clinical note exactly once. During processing, PHI will be detected and redacted. Only the **redacted text** and the generated **coding report** will be stored. Original notes containing PHI will be deleted immediately after processing. All storage and transit of data will be encrypted.
+
+---
+
+## Implementation Details
+
+1. **Upload & Processing**
+   - User uploads a clinical note (TXT, PDF, DOCX).  
+   - Backend receives the note over **HTTPS** (TLS 1.2+).  
+   - Run **Amazon Comprehend Medical DetectPHI** to identify PHI.  
+   - Redact all PHI from the note by replacing detected entities with placeholders (e.g., `[NAME]`, `[DATE]`).  
+   - Optionally, run **DetectEntitiesV2** or **InferICD10CM** for structured medical entity extraction.  
+   - Generate a **coding suggestion report** (YAML or JSON) based on redacted text.  
+
+2. **Storage**
+   - **Redacted text and coding report** are stored in **S3** or database.  
+   - All stored data must be encrypted:
+     - **At rest**: Server-side encryption (SSE-S3 or SSE-KMS).  
+     - **In transit**: Enforce HTTPS for all API calls.  
+   - **Original note with PHI** is **deleted immediately** from any temporary storage (server memory or S3) after redaction and report generation.  
+
+3. **Access & Security**
+   - Users access stored redacted text and coding reports via authenticated, role-based access.  
+   - Audit logging of upload, processing, and download events.  
+   - Optional retention policy: allow configurable time-based deletion of redacted reports for extra safety.  
+
+4. **User Impact**
+   - Users interact with the system exactly as before (upload → report).  
+   - No PHI is stored long term.  
+   - Reports are still fully useful for billing optimization.
+
+---
+
+## Acceptance Criteria
+
+| ID       | Description                                                                                 | Testable Condition |
+|----------|---------------------------------------------------------------------------------------------|------------------|
+| HIPAA-01 | PHI is removed from all stored notes                                                        | Redacted text contains no names, dates, MRNs, or addresses |
+| HIPAA-02 | Original note is deleted immediately after processing                                       | No PHI-containing file remains in S3 or server memory after processing |
+| HIPAA-03 | Data is encrypted in transit and at rest                                                    | HTTPS for API calls; S3 objects encrypted with SSE |
+| HIPAA-04 | Generated report is stored and accessible to authorized users                               | User can view/download report without exposure of PHI |
+| HIPAA-05 | Logging captures all upload, processing, and download actions                               | Audit log shows timestamp, user ID, and action type |

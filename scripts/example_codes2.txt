@@ -1,0 +1,101 @@
+
+## Test Note 1 — Missed Secondary Diagnosis
+
+### Clinical Note
+> 52-year-old male presents with worsening shortness of breath over 2 days.  
+> Past medical history significant for chronic obstructive pulmonary disease (COPD) and hypertension.  
+> On exam: diffuse wheezing, decreased air movement. No fever.  
+> Impression: COPD exacerbation.  
+> Plan: Nebulized bronchodilators, oral prednisone. Continue lisinopril for blood pressure.
+
+### Practitioner-entered ICD-10
+- J44.1 — COPD with (acute) exacerbation
+
+### Comprehend Medical detected ICD-10
+- J44.1 — COPD with acute exacerbation  
+- I10 — Essential (primary) hypertension
+
+### Missed ICD-10
+- ⚠️ I10 — Hypertension
+
+-------
+## Test Note 2 — Missed Related Condition
+
+### Clinical Note
+> Patient seen for follow-up after motor vehicle collision one week ago.  
+> Reports persistent neck pain and mild headache.  
+> Exam: paraspinal tenderness, limited range of motion, no neurological deficit.  
+> Diagnoses: cervical strain.  
+> Plan: NSAIDs, physical therapy referral.
+
+### Practitioner-entered ICD-10
+- S16.1XXA — Strain of muscle, fascia and tendon at neck level, initial encounter
+
+### Comprehend Medical detected ICD-10
+- S16.1XXA — Cervical strain  
+- R51.9 — Headache, unspecified
+
+### Missed ICD-10
+- ⚠️ R51.9 — Headache, unspecified
+
+-------
+## Test Note 3 — Overlapping Diagnoses (No Missed Codes)
+
+### Clinical Note
+> 34-year-old female presents with acute cystitis symptoms: dysuria, frequency, suprapubic pain.  
+> Denies flank pain or fever.  
+> Urinalysis positive for leukocyte esterase and nitrites.  
+> Plan: nitrofurantoin x5 days, hydration advice.
+
+### Practitioner-entered ICD-10
+- N30.00 — Acute cystitis without hematuria
+
+### Comprehend Medical detected ICD-10
+- N30.00 — Acute cystitis without hematuria
+
+### Missed ICD-10
+- None ✅
+
+-------
+## Test Note 4 — Multiple Missed Codes
+
+### Clinical Note
+> 68-year-old diabetic female presents with foot ulcer and redness around wound margins.  
+> She reports mild fever and swelling.  
+> Exam: ulcer on right plantar surface, erythema extending 3 cm, mild warmth.  
+> Impression: diabetic foot ulcer with cellulitis.  
+> Plan: wound culture, oral antibiotics, glucose control optimization.
+
+### Practitioner-entered ICD-10
+- E11.9 — Type 2 diabetes mellitus without complications
+
+### Comprehend Medical detected ICD-10
+- E11.621 — Type 2 diabetes mellitus with foot ulcer  
+- L03.115 — Cellulitis of right lower limb  
+- E11.9 — Type 2 diabetes mellitus (unspecified)
+
+### Missed ICD-10
+- ⚠️ E11.621 — Diabetic foot ulcer  
+- ⚠️ L03.115 — Cellulitis, right lower limb
+
+-------
+## Test Note 5 — Preventive Visit (Edge Case)
+
+### Clinical Note
+> 44-year-old male presents for annual wellness visit.  
+> No acute complaints.  
+> Past history of hyperlipidemia, controlled with atorvastatin.  
+> Screening: BP 128/82, BMI 29. Labs ordered for lipid panel.  
+> Counseling provided on diet and exercise.
+
+### Practitioner-entered ICD-10
+- Z00.00 — Encounter for general adult medical examination without abnormal findings
+
+### Comprehend Medical detected ICD-10
+- Z00.00 — General medical exam  
+- E78.5 — Hyperlipidemia, unspecified  
+- Z71.3 — Dietary counseling and surveillance
+
+### Missed ICD-10
+- ⚠️ E78.5 — Hyperlipidemia  
+- ⚠️ Z71.3 — Dietary counseling

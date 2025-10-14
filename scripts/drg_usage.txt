@@ -1,0 +1,54 @@
+# 🏥 DRG Weight & Hospital Reimbursement Integration Guide  
+### Implementation Specification for CMS FY 2023 Data  
+*(For AI Medical Coding System – DRG Delta Computation)*
+
+---
+
+## 🎯 Objective
+Implement automated DRG-based reimbursement delta calculations within the coding workflow to quantify the potential **revenue impact** of newly identified ICD-10 codes.  
+
+This logic applies **only to inpatient encounters** and uses publicly available **CMS IPPS FY 2023 Final Rule data**.
+
+---
+
+## ⚙️ Workflow Integration
+
+### **Step 1: Identify Eligible Encounters**
+- **Condition:** Encounter type = `inpatient`
+- **Input Source:** FHIR Encounter resource (`Encounter.class` or `Encounter.type`)
+- **Logic:**  
+  ```python
+  if encounter_type == "inpatient":
+      proceed_to_drg_delta()
+  else:
+      skip_drg_delta()
+- **Output:** Eligible encounter IDs passed to DRG Grouper module
+
+### **Step 2: Assign Baseline and Proposed DRGs**
+- **Baseline DRG**
+  - Derived from:
+    - Provider-billed ICD-10-CM codes
+    - ICD-10-PCS codes (if available)
+  - Use DRG logic tables to assign a DRG.
+
+- **Proposed DRG**
+  - Derived from:
+    - Provider-billed ICD-10 codes + AI-suggested ICD-10 codes
+
+- **Input Data Sources**
+  - Tables 6A–6K and Tables 6P.1a–6P.1f
+    - Define mapping between ICD-10-CM / ICD-10-PCS codes and MS-DRG assignments
+    - Include lists of:
+      - MCC (Major Complication/Comorbidity)
+      - CC (Complication/Comorbidity)
+      - Exclusions
+
+- **Output:**
+```{
+  "encounter_id": "ENC12345",
+  "baseline_drg": "177 - RESPIRATORY INFECTIONS W MCC",
+  "proposed_drg": "178 - RESPIRATORY INFECTIONS W/O MCC",
+  "baseline_weight": 1.2356,
+  "proposed_weight": 1.7934
+}```
+

@@ -1,0 +1,632 @@
+// Post-Facto Coding Review MVP - Database Schema
+// HIPAA-compliant database design for healthcare coding review application
+
+generator client {
+  provider = "prisma-client-py"
+  previewFeatures = ["fullTextSearch"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User authentication and account management
+model User {
+  id                String   @id @default(uuid())
+  email             String   @unique
+  passwordHash      String   @map("password_hash")
+  role              Role     @default(MEMBER)
+  emailVerified     Boolean  @default(false) @map("email_verified")
+  profileComplete   Boolean  @default(false) @map("profile_complete")
+
+  // Profile information
+  name              String?
+  phone             String?
+  timezone          String?  @default("America/New_York")
+  language          String?  @default("en")
+
+  // User preferences
+  theme             String?  @default("system") // light, dark, system
+  emailNotifications Boolean @default(true) @map("email_notifications")
+  dateFormat        String?  @default("MM/DD/YYYY") @map("date_format")
+  timeFormat        String?  @default("12h") @map("time_format")
+
+  // Subscription and trial management
+  trialEndDate      DateTime? @map("trial_end_date")
+  subscriptionStatus SubscriptionStatus @default(INACTIVE) @map("subscription_status")
+  stripeCustomerId  String?  @unique @map("stripe_customer_id")
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  lastLoginAt       DateTime? @map("last_login_at")
+
+  // Relations
+  encounters        Encounter[]
+  subscriptions     Subscription[]
+  auditLogs         AuditLog[]
+  tokens            Token[]
+  apiKeys           ApiKey[]
+  webhooks          Webhook[]
+  fhirConnections   FhirConnection[]
+
+  @@map("users")
+}
+
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+enum SubscriptionStatus {
+  INACTIVE
+  TRIAL
+  ACTIVE
+  CANCELLED
+  EXPIRED
+  SUSPENDED
+}
+
+// Clinical encounter submissions
+model Encounter {
+  id                String   @id @default(uuid())
+  userId            String   @map("user_id")
+
+  // Bulk upload support
+  batchId           String?  @map("batch_id") // Groups encounters from bulk upload
+
+  // Processing status
+  status            EncounterStatus @default(PENDING)
+  processingStartedAt DateTime? @map("processing_started_at")
+  processingCompletedAt DateTime? @map("processing_completed_at")
+  processingTime    Int?     @map("processing_time") // milliseconds
+
+  // Clinical metadata (de-identified)
+  patientAge        Int?     @map("patient_age")
+  patientSex        String?  @map("patient_sex")
+  visitDate         DateTime? @map("visit_date")
+
+  // Search/matching fields
+  fileHash          String?  @map("file_hash") // SHA-256 hash of original filename
+  providerInitials  String?  @map("provider_initials") // Extracted from PHI detection
+  dateOfService     DateTime? @map("date_of_service") // Extracted from PHI detection
+  encounterType     String?  @map("encounter_type") // e.g., "well child visit", "follow-up", "post-op"
+
+  // FHIR integration fields
+  fhirEncounterId   String?  @unique @map("fhir_encounter_id")  // Canonical FHIR Encounter ID
+  fhirPatientId     String?  @map("fhir_patient_id")            // FHIR Patient reference
+  fhirProviderId    String?  @map("fhir_provider_id")           // FHIR Practitioner reference
+  fhirSourceSystem  String?  @map("fhir_source_system")         // EHR system identifier
+  encounterSource   EncounterSource @default(FILE_UPLOAD) @map("encounter_source") // FILE_UPLOAD or FHIR
+
+  // Error handling
+  errorMessage      String?  @map("error_message")
+  retryCount        Int      @default(0) @map("retry_count")
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  uploadedFiles     UploadedFile[]
+  billingCodes      BillingCode[]
+  icd10Codes        ICD10Code[]
+  snomedCodes       SNOMEDCode[]
+  report            Report?
+  phiMapping        PhiMapping?
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@index([batchId])
+  @@map("encounters")
+}
+
+enum EncounterStatus {
+  PENDING
+  PROCESSING
+  COMPLETE
+  FAILED
+}
+
+enum EncounterSource {
+  FILE_UPLOAD
+  FHIR
+}
+
+enum ReportStatus {
+  PENDING      // Queued for processing
+  PROCESSING   // Currently being analyzed
+  COMPLETE     // Successfully generated
+  FAILED       // Error occurred
+}
+
+// Uploaded files (clinical notes and billing codes)
+model UploadedFile {
+  id                String   @id @default(uuid())
+  encounterId       String   @map("encounter_id")
+
+  // File metadata
+  fileType          FileType @map("file_type")
+  fileName          String   @map("file_name")
+  filePath          String   @map("file_path") // S3 key
+  fileSize          Int      @map("file_size") // bytes
+  mimeType          String   @map("mime_type")
+  extractedText     String?  @map("extracted_text") @db.Text // Store extracted text from file
+
+  // Duplicate detection
+  fileHash          String?  @map("file_hash") // SHA-256 hash for duplicate detection
+  isDuplicate       Boolean  @default(false) @map("is_duplicate")
+  duplicateHandling DuplicateHandling? @map("duplicate_handling")
+  originalFileId    String?  @map("original_file_id") // Reference to original if duplicate
+
+  // Virus scanning
+  scanStatus        ScanStatus @default(PENDING) @map("scan_status")
+  scanResult        String?  @map("scan_result")
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  // Relations
+  encounter         Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+
+  @@index([encounterId])
+  @@index([fileHash])
+  @@map("uploaded_files")
+}
+
+enum DuplicateHandling {
+  SKIP
+  REPLACE
+  PROCESS_AS_NEW
+}
+
+enum FileType {
+  CLINICAL_NOTE_TXT
+  CLINICAL_NOTE_PDF
+  CLINICAL_NOTE_DOCX
+  BILLING_CODES_CSV
+  BILLING_CODES_JSON
+}
+
+enum ScanStatus {
+  PENDING
+  CLEAN
+  INFECTED
+  ERROR
+}
+
+// PHI detection and de-identification mapping
+model PhiMapping {
+  id                String   @id @default(uuid())
+  encounterId       String   @unique @map("encounter_id")
+
+  // Encrypted PHI mapping (original PHI -> tokens)
+  encryptedMapping  String   @map("encrypted_mapping") // JSON encrypted with AES-256
+
+  // PHI metadata
+  phiDetected       Boolean  @default(false) @map("phi_detected")
+  phiEntityCount    Int      @default(0) @map("phi_entity_count")
+
+  // De-identified text
+  deidentifiedText  String   @map("deidentified_text") @db.Text
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  // Relations
+  encounter         Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+
+  @@map("phi_mappings")
+}
+
+// Billing codes submitted by user
+model BillingCode {
+  id                String   @id @default(uuid())
+  encounterId       String   @map("encounter_id")
+
+  // Code details
+  code              String   // CPT/ICD code (e.g., "72110", "M54.5")
+  codeType          String   @map("code_type") // "CPT", "ICD10", etc.
+  description       String?  // Optional description
+
+  // Flags
+  isBilled          Boolean  @default(true) @map("is_billed") // True for codes that were actually billed
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  // Relations
+  encounter         Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+
+  @@index([encounterId])
+  @@map("billing_codes")
+}
+
+// ICD-10 diagnosis codes extracted from clinical notes
+model ICD10Code {
+  id                String   @id @default(uuid())
+  encounterId       String   @map("encounter_id")
+
+  // Code details
+  code              String   // ICD-10-CM code (e.g., "M54.5")
+  description       String?  // Code description
+
+  // AWS Comprehend Medical metadata
+  category          String?  // Entity category (e.g., "MEDICAL_CONDITION")
+  type              String?  // Entity type (e.g., "DX_NAME")
+  score             Float?   // Confidence score (0-1)
+
+  // Text context
+  beginOffset       Int?     @map("begin_offset") // Character offset in original text
+  endOffset         Int?     @map("end_offset")
+  text              String?  // Original matched text from clinical note
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  // Relations
+  encounter         Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+
+  @@index([encounterId])
+  @@index([code])
+  @@map("icd10_codes")
+}
+
+// SNOMED CT procedure codes extracted from clinical notes
+model SNOMEDCode {
+  id                String   @id @default(uuid())
+  encounterId       String   @map("encounter_id")
+
+  // Code details
+  code              String   // SNOMED CT concept ID
+  description       String?  // Procedure description
+
+  // AWS Comprehend Medical metadata
+  category          String?  // Entity category (e.g., "TEST_TREATMENT_PROCEDURE")
+  type              String?  // Entity type (e.g., "PROCEDURE_NAME")
+  score             Float?   // Confidence score (0-1)
+
+  // Text context
+  beginOffset       Int?     @map("begin_offset") // Character offset in original text
+  endOffset         Int?     @map("end_offset")
+  text              String?  // Original matched text from clinical note
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  // Relations
+  encounter         Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+
+  @@index([encounterId])
+  @@index([code])
+  @@map("snomed_codes")
+}
+
+// SNOMED CT to CPT crosswalk mapping table
+model SNOMEDCrosswalk {
+  id                String   @id @default(uuid())
+
+  // SNOMED to CPT mapping
+  snomedCode        String   @map("snomed_code") // SNOMED CT concept ID
+  snomedDescription String?  @map("snomed_description")
+  cptCode           String   @map("cpt_code") // CPT code
+  cptDescription    String?  @map("cpt_description")
+
+  // Mapping metadata
+  mappingType       String?  @map("mapping_type") // e.g., "EXACT", "APPROXIMATE", "BROADER"
+  confidence        Float?   // Mapping confidence/quality score
+
+  // Source information
+  source            String?  // e.g., "CMS", "SNOMED_INTERNATIONAL"
+  sourceVersion     String?  @map("source_version")
+  effectiveDate     DateTime? @map("effective_date")
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@unique([snomedCode, cptCode])
+  @@index([snomedCode])
+  @@index([cptCode])
+  @@map("snomed_crosswalk")
+}
+
+// Generated coding review reports
+model Report {
+  id                String   @id @default(uuid())
+  encounterId       String   @unique @map("encounter_id")
+
+  // Processing status (for async processing)
+  status            ReportStatus @default(PENDING)
+  processingStartedAt DateTime? @map("processing_started_at")
+  processingCompletedAt DateTime? @map("processing_completed_at")
+  processingTimeMs  Int?     @map("processing_time_ms")
+
+  // Progress tracking (optional for detailed status)
+  progressPercent   Int?     @default(0) @map("progress_percent")
+  currentStep       String?  @map("current_step") // e.g., "phi_detection", "code_inference"
+
+  // Error handling
+  errorMessage      String?  @map("error_message")
+  errorDetails      Json?    @map("error_details")
+  retryCount        Int      @default(0) @map("retry_count")
+
+  // Billed codes (as submitted)
+  billedCodes       Json     @map("billed_codes") // Array of CPT/ICD codes
+
+  // Suggested additional codes
+  suggestedCodes    Json     @map("suggested_codes") // Array of code suggestions with justifications
+
+  // AWS Comprehend Medical extracted codes
+  extractedIcd10Codes Json?  @map("extracted_icd10_codes") // ICD-10 codes from Comprehend Medical
+  extractedSnomedCodes Json? @map("extracted_snomed_codes") // SNOMED codes from Comprehend Medical
+
+  // CPT suggestions from SNOMED crosswalk
+  cptSuggestions    Json?    @map("cpt_suggestions") // CPT codes mapped from SNOMED via crosswalk
+
+  // Revenue analysis
+  incrementalRevenue Float   @default(0) @map("incremental_revenue")
+
+  // AI processing metadata
+  aiModel           String   @map("ai_model") // e.g., "gpt-4"
+  confidenceScore   Float?   @map("confidence_score")
+
+  // Report formats
+  reportYaml        String?  @map("report_yaml") @db.Text
+  reportJson        String?  @map("report_json") @db.Text
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  // Relations
+  encounter         Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("reports")
+}
+
+// Subscription and payment management
+model Subscription {
+  id                String   @id @default(uuid())
+  userId            String   @map("user_id")
+
+  // Stripe integration
+  stripeSubscriptionId String @unique @map("stripe_subscription_id")
+  stripeCustomerId  String   @map("stripe_customer_id")
+  stripePriceId     String   @map("stripe_price_id")
+
+  // Subscription details
+  status            SubscriptionStatus
+  currentPeriodStart DateTime @map("current_period_start")
+  currentPeriodEnd  DateTime @map("current_period_end")
+  cancelAtPeriodEnd Boolean  @default(false) @map("cancel_at_period_end")
+  canceledAt        DateTime? @map("canceled_at")
+
+  // Billing
+  amount            Float    // In dollars (e.g., 100.00)
+  currency          String   @default("usd")
+  billingInterval   String   @map("billing_interval") // "month" or "year"
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("subscriptions")
+}
+
+// Email verification and password reset tokens
+model Token {
+  id                String   @id @default(uuid())
+  userId            String   @map("user_id")
+
+  // Token details
+  token             String   @unique
+  tokenType         TokenType @map("token_type")
+  expiresAt         DateTime @map("expires_at")
+  used              Boolean  @default(false)
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId, tokenType])
+  @@map("tokens")
+}
+
+enum TokenType {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+  API_KEY
+}
+
+// Audit logging for HIPAA compliance
+model AuditLog {
+  id                String   @id @default(uuid())
+  userId            String?  @map("user_id")
+
+  // Action details
+  action            String   // e.g., "UPLOAD_FILE", "VIEW_REPORT", "LOGIN_SUCCESS"
+  resourceType      String?  @map("resource_type") // e.g., "Encounter", "Report"
+  resourceId        String?  @map("resource_id")
+
+  // Request metadata
+  ipAddress         String?  @map("ip_address")
+  userAgent         String?  @map("user_agent")
+
+  // Additional context
+  metadata          Json?    // Additional structured data
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user              User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@index([resourceType, resourceId])
+  @@map("audit_logs")
+}
+
+// API Keys for programmatic access
+model ApiKey {
+  id                String   @id @default(uuid())
+  userId            String   @map("user_id")
+
+  // API Key details
+  name              String   // User-provided name for the key
+  keyHash           String   @unique @map("key_hash") // Hashed API key
+  keyPrefix         String   @map("key_prefix") // First 8 chars for identification
+
+  // Permissions and limits
+  isActive          Boolean  @default(true) @map("is_active")
+  rateLimit         Int      @default(100) @map("rate_limit") // Requests per minute
+
+  // Usage tracking
+  lastUsedAt        DateTime? @map("last_used_at")
+  usageCount        Int      @default(0) @map("usage_count")
+
+  // Expiration
+  expiresAt         DateTime? @map("expires_at")
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  webhooks          Webhook[]
+
+  @@index([userId])
+  @@index([keyHash])
+  @@index([isActive])
+  @@map("api_keys")
+}
+
+// Webhook configurations for API integrations
+model Webhook {
+  id                String   @id @default(uuid())
+  userId            String   @map("user_id")
+  apiKeyId          String?  @map("api_key_id")
+
+  // Webhook configuration
+  url               String   // Webhook endpoint URL
+  events            String[] // Events to subscribe to (e.g., "encounter.completed")
+  secret            String   // Secret for signature verification
+
+  // Status and health
+  isActive          Boolean  @default(true) @map("is_active")
+  failureCount      Int      @default(0) @map("failure_count")
+  lastSuccessAt     DateTime? @map("last_success_at")
+  lastFailureAt     DateTime? @map("last_failure_at")
+  lastError         String?  @map("last_error")
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  apiKey            ApiKey?  @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  deliveries        WebhookDelivery[]
+
+  @@index([userId])
+  @@index([apiKeyId])
+  @@index([isActive])
+  @@map("webhooks")
+}
+
+// Webhook delivery logs
+model WebhookDelivery {
+  id                String   @id @default(uuid())
+  webhookId         String   @map("webhook_id")
+
+  // Delivery details
+  event             String   // Event type
+  payload           Json     // Event payload
+
+  // HTTP details
+  requestUrl        String   @map("request_url")
+  requestMethod     String   @default("POST") @map("request_method")
+  requestHeaders    Json     @map("request_headers")
+
+  // Response details
+  responseStatus    Int?     @map("response_status")
+  responseBody      String?  @map("response_body")
+  responseTime      Int?     @map("response_time") // milliseconds
+
+  // Status
+  status            WebhookDeliveryStatus
+  error             String?
+
+  // Retry tracking
+  attemptNumber     Int      @default(1) @map("attempt_number")
+  maxAttempts       Int      @default(3) @map("max_attempts")
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+  deliveredAt       DateTime? @map("delivered_at")
+  nextRetryAt       DateTime? @map("next_retry_at")
+
+  // Relations
+  webhook           Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId, createdAt])
+  @@index([status])
+  @@index([nextRetryAt])
+  @@map("webhook_deliveries")
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  DELIVERED
+  FAILED
+  RETRYING
+}
+
+// FHIR EHR integration configuration
+model FhirConnection {
+  id                String   @id @default(uuid())
+  userId            String   @map("user_id")
+
+  // FHIR server configuration
+  fhirServerUrl     String   @map("fhir_server_url")     // Base URL
+  fhirVersion       String   @map("fhir_version")        // R4, R5, etc.
+
+  // Authentication
+  authType          FhirAuthType @map("auth_type")       // OAUTH2, BASIC, API_KEY
+  clientId          String?  @map("client_id")
+  clientSecretHash  String?  @map("client_secret_hash")  // Encrypted
+  tokenEndpoint     String?  @map("token_endpoint")
+  scope             String?  @map("scope")
+
+  // Connection metadata
+  isActive          Boolean  @default(true) @map("is_active")
+  lastSyncAt        DateTime? @map("last_sync_at")
+  lastError         String?  @map("last_error")
+
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("fhir_connections")
+  @@index([userId])
+}
+
+enum FhirAuthType {
+  OAUTH2
+  BASIC
+  API_KEY
+  SMART_ON_FHIR
+}

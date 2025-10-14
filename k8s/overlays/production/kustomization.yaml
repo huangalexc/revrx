@@ -1,0 +1,43 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: revrx
+
+bases:
+  - ../../base
+
+commonLabels:
+  environment: production
+
+patches:
+  # Update PVC storage for production
+  - target:
+      kind: PersistentVolumeClaim
+      name: postgres-pvc
+    patch: |-
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: 100Gi
+
+  # Update ingress for production domain
+  - target:
+      kind: Ingress
+      name: revrx-ingress
+    patch: |-
+      - op: replace
+        path: /spec/tls/0/hosts
+        value:
+          - app.revrx.com
+          - api.revrx.com
+      - op: replace
+        path: /spec/rules/0/host
+        value: app.revrx.com
+      - op: replace
+        path: /spec/rules/1/host
+        value: api.revrx.com
+
+images:
+  - name: revrx-backend
+    newTag: production-v1.0.0
+  - name: revrx-frontend
+    newTag: production-v1.0.0

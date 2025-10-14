@@ -1,0 +1,108 @@
+# Feature Specification: HIPAA-Compliant Medical Coding Application
+
+## Overview
+This document describes the features and workflow for an AI-assisted medical coding application. The application accepts clinical notes either via file upload (S3) or through FHIR-based EHR integration. The system automatically extracts relevant clinical data, removes PHI, generates ICD-10 and CPT coding recommendations, and stores structured results securely.
+
+---
+
+## Features
+
+### 1. File Upload Workflow
+**Objective:** Support clinics without FHIR integration.
+
+- **Upload:** User uploads one or more files to an encrypted S3 bucket.
+- **Text Extraction:** Parse uploaded files to extract raw text.
+- **PHI Detection:** Run DetectPHI to redact PHI and produce **Censored Text**.
+- **Clinical Relevance Filtering:** Use GPT model to extract **Relevant Text** (Assessment, key notes) and optionally extract Provider Initials and Date of Service.
+- **Entity Extraction & Coding:**
+  - DetectEntities → extract medical conditions, symptoms, signs, procedures.
+  - InferICD10 → generate ICD-10 codes from Relevant Text.
+  - InferSNOMEDCT → generate SNOMED CT codes from Relevant Text.
+  - SNOMED → CPT crosswalk → generate CPT codes.
+- **LLM Code Recommendation:** GPT-based suggestion of coding, considering provider-billed codes if provided.
+- **Storage:**
+  - Filename hash (anonymized)
+  - Provider Initials (from DetectPHI or LLM)
+  - Date of Service
+  - Relevant Text
+  - Provider-billed ICD-10s/CPTs
+  - Recommended ICD-10s/CPTs
+- **Duplicate Detection:** Flag and handle previously uploaded files.
+
+---
+
+### 2. FHIR-Based Workflow
+**Objective:** Support clinics with FHIR-compliant EHRs for seamless integration.
+
+- **Retrieve Encounters:** Query `Encounter` resources via FHIR API.
+- **Retrieve Clinical Notes:** Fetch associated `Composition` or `DocumentReference` resources containing note text.
+- **PHI Detection:** Run DetectPHI to redact PHI, producing **Censored Text**.
+- **Clinical Relevance Filtering:** GPT extracts **Relevant Text** and optionally confirms provider and date of service (can default to FHIR metadata).
+- **Entity Extraction & Coding:**
+  - DetectEntities → extract medical conditions, symptoms, signs, procedures.
+  - InferICD10 → generate ICD-10 codes from Relevant Text.
+  - InferSNOMEDCT → generate SNOMED CT codes from Relevant Text.
+  - SNOMED → CPT crosswalk → generate CPT codes.
+- **LLM Code Recommendation:** GPT-based suggestion of coding.
+- **Storage:**
+  - FHIR Encounter ID (canonical reference)
+  - Patient ID (from `Encounter.subject`)
+  - Provider ID (from `Encounter.participant`)
+  - Date of Service (from `Encounter.period`)
+  - Relevant Text (Censored, filtered)
+  - Provider-billed ICD-10s/CPTs (if available)
+  - Recommended ICD-10s/CPTs
+- **Optional EHR Update:** Store suggested coding in `Claim` or `DocumentReference` resources in the EHR.
+
+---
+
+### 3. Security & Compliance
+- **Encryption:** All data encrypted at rest (S3 or DB) and in transit.
+- **HIPAA Compliance:** PHI removed before sending any text to LLM.
+- **Retention Policy:** Optionally delete raw uploaded files after processing.
+- **Access Control:** Ensure only authorized users can retrieve or query processed encounters.
+
+---
+
+### 4. Bulk Upload Support
+- Support multiple file uploads in a single operation.
+- Maintain mapping between original file (or Encounter ID) and processed output.
+- Hash filenames for anonymization.
+- Flag duplicates on upload.
+
+---
+
+### 5. Encounter Lookup
+- Allow users to quickly retrieve processed encounters by:
+  - Hashed filename (file upload workflow)
+  - FHIR Encounter ID (FHIR workflow)
+  - Provider initials, date of service, or combination (extracted via DetectPHI + Clinical Relevance Filter)
+
+---
+
+### 6. Clinical Relevance Filtering
+- Extract only **Assessment** and **Plan** sections.
+- Remove irrelevant sections (vitals, vitals cont., screenings, immunizations, growth/development, anticipatory guidance, etc.) to shorten LLM context.
+- Produce structured output for downstream coding steps.
+
+---
+
+### 7. Duplicate Detection & Validation
+- Detect previously uploaded files or encounters.
+- Provide a feature flag or warning if the encounter has already been processed.
+- Allow user to overwrite, skip, or merge updates.
+
+---
+
+### 8. Future-Ready Features
+- Modular pipeline for easy integration with EHRs using FHIR.
+- Encapsulate file-based workflow so new input sources can be added later (HL7 messages, direct PDF parsing, etc.).
+- Structured storage of all outputs to facilitate future analytics or large-scale hospital integration.
+
+---
+
+### Notes for AI Developer
+- All LLM-based steps must only receive PHI-stripped content.
+- Filtering logic should be modular so that changes to Clinical Relevance Filter or SNOMED→CPT crosswalk are easy to update.
+- Maintain traceability between source (file hash or Encounter ID) and output.
+- Include logging for each step to allow debugging and auditing.

@@ -1,0 +1,107 @@
+Post-Facto Coding Review MVP Product Requirements Document
+
+1. introduction  
+This document defines the requirements for the Post-Facto Coding Review Minimum Viable Product (MVP). The application will ingest completed clinical encounter notes and billed codes to identify legitimate, missed billing opportunities. The purpose of this document is to provide a comprehensive reference for stakeholders, engineering, and design teams to ensure clarity of scope and implementation.
+
+2. product overview  
+The Post-Facto Coding Review MVP is a web-based tool for healthcare providers and revenue cycle teams. Users will upload or import completed clinical documentation and associated billing codes. The system uses a HIPAA-compliant preprocessing layer and natural language processing (NLP) to extract clinical facts, compare them to the billed CPT/ICD codes, and generate a structured report highlighting potential additional codes supported by the documentation. The product focuses on accuracy, regulatory compliance, and ease of integration with existing workflows.
+
+Key characteristics:  
+- Input: free-text clinical note and billed CPT/ICD codes (e.g., CSV or JSON).  
+- Processing:  
+  1. **HIPAA compliance layer**: Amazon Comprehend Medical is used to detect and extract PHI and clinical entities. PHI is stripped or managed locally.  
+  2. **NLP/code suggestion**: Extracted medical facts are sent to ChatGPT for post-facto coding suggestions.  
+- Output: structured, human-readable report with suggested codes, justification, and estimated incremental revenue.  
+- Payment and subscription: integrated payment portal supporting free 7-day trial, subscription starts at $100/month.
+
+3. goals and objectives  
+- Identify missed legitimate billing opportunities to improve revenue capture.  
+- Provide an auditable, structured summary for coding staff or clinicians.  
+- Minimize workflow friction by allowing simple file uploads or API integration.  
+- Demonstrate measurable revenue uplift to support ROI for future pre-billing and real-time products.  
+- Enable monetization through subscription plans with secure payment processing.  
+- Ensure HIPAA compliance for all patient data processed through the system.
+
+Success metrics:  
+- ≥90% precision in suggested codes (as validated by coding specialists).  
+- Average processing time per note ≤ 30 seconds.  
+- User satisfaction rating ≥ 80% in pilot testing.  
+- Conversion from trial to paid subscription ≥ 30% in pilot users.  
+- 100% PHI handled according to HIPAA standards, no unauthorized exposure.
+
+4. target audience  
+- Primary: Physicians, nurse practitioners, and clinic managers seeking to optimize revenue.  
+- Secondary: Medical billing specialists, compliance officers, and health system finance teams.  
+- Tertiary: Product and engineering stakeholders evaluating future integrations with EHRs and practice management systems.
+
+5. features and requirements  
+Core features:  
+- Secure user authentication and role-based access.  
+- Upload of clinical notes (TXT, PDF, DOCX) and billed codes (CSV or JSON).  
+- **HIPAA compliance layer using Amazon Comprehend Medical** for PHI detection and extraction of medical entities.  
+- Automated NLP analysis and code-suggestion engine (ChatGPT) on de-identified medical data.  
+- Detailed comparison report with suggested additional codes and rationales.  
+- Downloadable or exportable YAML/JSON report for downstream systems.  
+- Dashboard summarizing cumulative potential revenue across multiple encounters.  
+- **Payment portal and subscription management:**  
+  - Users can enter payment information to activate a **free 7-day trial**.  
+  - Automatic transition to $100/month subscription after trial expires.  
+  - Payment history, billing receipts, and cancellation options visible in user dashboard.  
+  - Integration with Stripe or similar PCI-compliant payment processor.
+
+Non-functional requirements:  
+- HIPAA-compliant data handling, encrypted at rest and in transit.  
+- Scalability to process at least 5,000 encounters per day.  
+- Average response latency under 30 seconds per encounter.  
+- Audit logging of all user actions.  
+- Secure handling of payment information per PCI DSS standards.
+
+6. user stories and acceptance criteria  
+
+| ID     | User Story                                                                                               | Acceptance Criteria                                                                                                   |
+|--------|-----------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| ST-101 | As a registered user, I can create an account and log in securely.                                         | Users can register with email and password, receive confirmation email, and log in via HTTPS with encrypted credentials. |
+| ST-102 | As a user, I can upload a clinical note in TXT, PDF, or DOCX format.                                       | The system accepts files up to 5MB, validates format, and confirms successful upload.                                   |
+| ST-103 | As a user, I can upload billed CPT/ICD codes in CSV or JSON format.                                        | The system accepts and validates structure of billing code files and links them to the uploaded clinical note.           |
+| ST-104 | As a user, I can view a processing status for each uploaded encounter.                                     | The interface shows “pending,” “processing,” or “complete” within 30 seconds of submission.                             |
+| ST-105 | As a user, I can receive a structured report listing billed codes, suggested additional codes, and reasons.| Output is presented in on-screen table and downloadable YAML/JSON; each suggestion includes supporting text snippets.    |
+| ST-106 | As a user, I can download a summary of total estimated incremental revenue across all processed encounters.| Users can export cumulative revenue opportunities as CSV or PDF.                                                        |
+| ST-107 | As an admin, I can view system usage logs and user activity for auditing.                                  | Admin dashboard displays timestamped logs of uploads, analyses, and downloads.                                          |
+| ST-108 | As a developer, I can access an API endpoint to submit encounters programmatically.                        | API endpoint accepts secure POST requests with authentication tokens and returns structured JSON output.                |
+| ST-109 | As a system, I must model and store data for encounters, users, and reports in a database.                 | Database schema includes tables for users, encounters, uploaded files, processed reports, and audit logs.               |
+| ST-110 | As a user, I can delete my account and associated data for privacy compliance.                              | Deletion request removes user data from the database and storage within 24 hours.                                       |
+| ST-111 | As a user, I can securely provide payment information to start a free 7-day trial and manage subscription.| Payment info is stored securely via PCI-compliant service; trial activates immediately; subscription automatically charges $100/month after 7 days. |
+| ST-112 | As a system, I can detect and strip PHI using Amazon Comprehend Medical before sending data to ChatGPT.    | PHI is removed or masked, de-identified text is sent to ChatGPT for analysis, and identifiers are stored securely locally. |
+| ST-113 | Edge case: If an upload is malformed or corrupted, the system notifies the user with clear error messaging.| The system provides actionable error messages and does not crash.                                                       |
+
+7. technical requirements / stack  
+- Backend: Python with FastAPI or Django REST Framework for API endpoints.  
+- HIPAA compliance layer: Amazon Comprehend Medical for PHI detection and extraction of medical entities.  
+- NLP/AI: ChatGPT (OpenAI GPT-4 or GPT-3.5 hybrid) on de-identified text for post-facto coding suggestions.  
+- Database: PostgreSQL for structured data (users, encounters, reports, logs, subscriptions).  
+- Storage: Encrypted S3-compatible object storage for uploaded files and generated reports.  
+- Frontend: React or Vue.js single-page application.  
+- Payment Integration: Stripe or equivalent PCI-compliant processor supporting trial, subscription, billing, and receipt management.  
+- Security: TLS 1.2+ encryption, JWT-based authentication, HIPAA-compliant hosting, PCI DSS compliance for payments.  
+- Deployment: Docker containers orchestrated via Kubernetes or managed PaaS.  
+- Logging/Monitoring: Centralized logging (ELK stack), alerting for failures or anomalous activity.
+
+8. design and user interface  
+- Clean, minimalist web dashboard with left navigation panel: “Upload,” “Reports,” “Summary,” “Payment & Subscription,” “Admin.”  
+- Drag-and-drop upload zone supporting multiple file formats.  
+- Real-time status indicator for processing progress.  
+- Report view displaying:  
+  * Encounter metadata (patient age/sex, visit date).  
+  * Table comparing billed codes vs. suggested codes with justifications and confidence scores.  
+  * Estimated incremental revenue.  
+- HIPAA compliance layer: PHI detected, masked, and mapped securely for local reference.  
+- Payment & subscription page:  
+  * Secure credit card input via Stripe Elements.  
+  * Trial activation with clear 7-day countdown.  
+  * Subscription status and billing history displayed.  
+  * Cancel or update subscription options.  
+- Summary page with aggregate metrics: total encounters processed, total potential revenue, average revenue opportunity per encounter.  
+- Responsive design optimized for desktop and tablet.  
+- Accessibility: WCAG 2.1 AA compliance for color contrast and keyboard navigation.
+
+This PRD outlines the foundation for a secure, HIPAA-compliant, scalable, and monetized Post-Facto Coding Review MVP, enabling users to identify missed billing opportunities while managing subscriptions and patient data securely.

@@ -1,0 +1,895 @@
+openapi: 3.0.3
+info:
+  title: Post-Facto Coding Review API
+  description: |
+    HIPAA-compliant API for automated medical coding review and revenue optimization.
+
+    ## Overview
+    This API allows healthcare providers to submit clinical notes and billed codes for automated review,
+    identifying missed billing opportunities using AI-powered analysis.
+
+    ## Authentication
+    All API endpoints require JWT authentication via Bearer token in the Authorization header:
+    ```
+    Authorization: Bearer <your_jwt_token>
+    ```
+
+    ## HIPAA Compliance
+    All PHI is processed through Amazon Comprehend Medical for de-identification before AI analysis.
+    Data is encrypted at rest and in transit (TLS 1.3).
+
+  version: 1.0.0
+  contact:
+    name: RevRX Support
+    email: support@revrx.com
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://api.revrx.com/v1
+    description: Production server
+  - url: https://staging-api.revrx.com/v1
+    description: Staging server
+  - url: http://localhost:8000/v1
+    description: Local development server
+
+tags:
+  - name: Authentication
+    description: User authentication and session management
+  - name: Encounters
+    description: Clinical encounter upload and processing
+  - name: Reports
+    description: Analysis reports and revenue summaries
+  - name: Subscriptions
+    description: Payment and subscription management
+  - name: Admin
+    description: Administrative functions (admin role required)
+  - name: Health
+    description: System health and monitoring
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check endpoint
+      description: Returns system health status
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: System is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy, degraded, unhealthy]
+                  timestamp:
+                    type: string
+                    format: date-time
+                  services:
+                    type: object
+                    properties:
+                      database:
+                        type: string
+                        enum: [up, down]
+                      storage:
+                        type: string
+                        enum: [up, down]
+                      ai_service:
+                        type: string
+                        enum: [up, down]
+
+  /auth/register:
+    post:
+      tags:
+        - Authentication
+      summary: Register new user
+      description: Create a new user account with email verification
+      operationId: registerUser
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+                - fullName
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: doctor@clinic.com
+                password:
+                  type: string
+                  format: password
+                  minLength: 8
+                  example: SecurePass123!
+                fullName:
+                  type: string
+                  example: Dr. Jane Smith
+                organization:
+                  type: string
+                  example: City Medical Center
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Email already exists
+
+  /auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: User login
+      description: Authenticate user and receive JWT token
+      operationId: loginUser
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  format: password
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accessToken:
+                    type: string
+                    description: JWT access token
+                  refreshToken:
+                    type: string
+                    description: JWT refresh token
+                  expiresIn:
+                    type: integer
+                    description: Token expiration in seconds
+                    example: 3600
+                  user:
+                    $ref: '#/components/schemas/UserResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/verify:
+    get:
+      tags:
+        - Authentication
+      summary: Verify email address
+      description: Verify user email using token sent via email
+      operationId: verifyEmail
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Email verified successfully
+        '400':
+          description: Invalid or expired token
+
+  /auth/refresh:
+    post:
+      tags:
+        - Authentication
+      summary: Refresh access token
+      description: Get new access token using refresh token
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - refreshToken
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        '200':
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accessToken:
+                    type: string
+                  expiresIn:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /encounters/upload-note:
+    post:
+      tags:
+        - Encounters
+      summary: Upload clinical note
+      description: |
+        Upload a clinical note file (TXT, PDF, or DOCX format).
+        Maximum file size: 5MB.
+        Creates a new encounter record.
+      operationId: uploadNote
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Clinical note file
+                patientAge:
+                  type: integer
+                  minimum: 0
+                  maximum: 150
+                patientSex:
+                  type: string
+                  enum: [M, F, O]
+                visitDate:
+                  type: string
+                  format: date
+                encounterType:
+                  type: string
+                  example: Office Visit
+      responses:
+        '201':
+          description: Note uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EncounterResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '413':
+          description: File too large
+        '415':
+          description: Unsupported file type
+
+  /encounters/{encounterId}/upload-codes:
+    post:
+      tags:
+        - Encounters
+      summary: Upload billing codes
+      description: Upload billed CPT/ICD codes in CSV or JSON format
+      operationId: uploadBillingCodes
+      parameters:
+        - name: encounterId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Billing codes file (CSV or JSON)
+          application/json:
+            schema:
+              type: object
+              required:
+                - codes
+              properties:
+                codes:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/BillingCode'
+      responses:
+        '200':
+          description: Billing codes uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EncounterResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /encounters/{encounterId}/status:
+    get:
+      tags:
+        - Encounters
+      summary: Get processing status
+      description: Check the processing status of an encounter
+      operationId: getEncounterStatus
+      parameters:
+        - name: encounterId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Status retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  encounterId:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [pending, processing, complete, failed]
+                  processingTime:
+                    type: number
+                    description: Processing time in seconds
+                  error:
+                    type: string
+                    description: Error message if status is failed
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /encounters:
+    get:
+      tags:
+        - Encounters
+      summary: List encounters
+      description: Get list of user's encounters with pagination
+      operationId: listEncounters
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, processing, complete, failed]
+      responses:
+        '200':
+          description: Encounters retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  encounters:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EncounterResponse'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+
+  /reports/{encounterId}:
+    get:
+      tags:
+        - Reports
+      summary: Get encounter report
+      description: Retrieve detailed analysis report for an encounter
+      operationId: getReport
+      parameters:
+        - name: encounterId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [json, yaml, pdf]
+            default: json
+      responses:
+        '200':
+          description: Report retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportResponse'
+            application/x-yaml:
+              schema:
+                type: string
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /reports/summary:
+    get:
+      tags:
+        - Reports
+      summary: Get revenue summary
+      description: Get aggregate revenue opportunity summary across encounters
+      operationId: getRevenueSummary
+      parameters:
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [7d, 30d, 90d, all]
+            default: 30d
+      responses:
+        '200':
+          description: Summary retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevenueSummary'
+
+  /subscriptions/start-trial:
+    post:
+      tags:
+        - Subscriptions
+      summary: Start free trial
+      description: Activate 7-day free trial
+      operationId: startTrial
+      responses:
+        '200':
+          description: Trial started successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+        '400':
+          description: Trial already used
+
+  /subscriptions/create-checkout:
+    post:
+      tags:
+        - Subscriptions
+      summary: Create checkout session
+      description: Create Stripe checkout session for subscription
+      operationId: createCheckout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - priceId
+              properties:
+                priceId:
+                  type: string
+                  description: Stripe price ID
+                successUrl:
+                  type: string
+                  format: uri
+                cancelUrl:
+                  type: string
+                  format: uri
+      responses:
+        '200':
+          description: Checkout session created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionId:
+                    type: string
+                  url:
+                    type: string
+                    format: uri
+
+  /subscriptions/me:
+    get:
+      tags:
+        - Subscriptions
+      summary: Get current subscription
+      description: Get user's subscription details
+      operationId: getMySubscription
+      responses:
+        '200':
+          description: Subscription retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+
+  /subscriptions/cancel:
+    post:
+      tags:
+        - Subscriptions
+      summary: Cancel subscription
+      description: Cancel active subscription
+      operationId: cancelSubscription
+      responses:
+        '200':
+          description: Subscription cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+
+  /admin/users:
+    get:
+      tags:
+        - Admin
+      summary: List all users
+      description: Get list of all users (admin only)
+      operationId: listUsers
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Users retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UserResponse'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /admin/audit-logs:
+    get:
+      tags:
+        - Admin
+      summary: Get audit logs
+      description: Retrieve audit logs for compliance (admin only)
+      operationId: getAuditLogs
+      parameters:
+        - name: userId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: action
+          in: query
+          schema:
+            type: string
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+      responses:
+        '200':
+          description: Logs retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditLog'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    UserResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        fullName:
+          type: string
+        organization:
+          type: string
+        role:
+          type: string
+          enum: [USER, ADMIN]
+        createdAt:
+          type: string
+          format: date-time
+        subscriptionStatus:
+          type: string
+          enum: [trial, active, cancelled, expired]
+
+    EncounterResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        uploadDate:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [pending, processing, complete, failed]
+        processingTime:
+          type: number
+          description: Processing time in seconds
+        patientAge:
+          type: integer
+        patientSex:
+          type: string
+        visitDate:
+          type: string
+          format: date
+        encounterType:
+          type: string
+
+    BillingCode:
+      type: object
+      required:
+        - code
+        - type
+      properties:
+        code:
+          type: string
+          example: "99214"
+        type:
+          type: string
+          enum: [CPT, ICD10]
+        description:
+          type: string
+
+    ReportResponse:
+      type: object
+      properties:
+        encounterId:
+          type: string
+          format: uuid
+        billedCodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/BillingCode'
+        suggestedCodes:
+          type: array
+          items:
+            type: object
+            properties:
+              code:
+                $ref: '#/components/schemas/BillingCode'
+              justification:
+                type: string
+              supportingText:
+                type: array
+                items:
+                  type: string
+              confidence:
+                type: number
+                minimum: 0
+                maximum: 1
+              estimatedRevenue:
+                type: number
+                description: Estimated incremental revenue in USD
+        totalIncrementalRevenue:
+          type: number
+          description: Total estimated incremental revenue in USD
+        generatedAt:
+          type: string
+          format: date-time
+
+    RevenueSummary:
+      type: object
+      properties:
+        totalEncounters:
+          type: integer
+        processedEncounters:
+          type: integer
+        totalPotentialRevenue:
+          type: number
+        averageRevenuePerEncounter:
+          type: number
+        period:
+          type: object
+          properties:
+            start:
+              type: string
+              format: date
+            end:
+              type: string
+              format: date
+        chartData:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+                format: date
+              encounters:
+                type: integer
+              revenue:
+                type: number
+
+    SubscriptionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [trial, active, cancelled, expired]
+        trialEndDate:
+          type: string
+          format: date-time
+        billingPeriod:
+          type: string
+          enum: [monthly, annual]
+        amount:
+          type: number
+        currency:
+          type: string
+          example: USD
+        nextBillingDate:
+          type: string
+          format: date-time
+
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        action:
+          type: string
+          example: "encounter_upload"
+        timestamp:
+          type: string
+          format: date-time
+        ipAddress:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+
+    Pagination:
+      type: object
+      properties:
+        currentPage:
+          type: integer
+        totalPages:
+          type: integer
+        totalItems:
+          type: integer
+        itemsPerPage:
+          type: integer
+
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+security:
+  - bearerAuth: []

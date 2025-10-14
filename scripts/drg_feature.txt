@@ -1,0 +1,226 @@
+# Feature: DRG assessment, weighting and delta calculation
+
+This feature adds an automated DRG (Diagnosis Related Group) assessment step into the coding pipeline.  
+It detects whether an encounter is inpatient (and thus eligible for DRG grouping), runs an open CMS-based MS-DRG grouper using the pipeline's ICD-10 diagnoses and ICD-10-PCS procedures, computes current and proposed DRG weights, and returns a quantified revenue delta when the LLM / coder suggestions change the coded diagnosis set.
+
+Use this doc as a developer spec for implementing the feature and for writing unit / integration tests against Synthea or other FHIR R4 test data.
+
+---
+
+## overview
+
+- purpose: Provide hospitals/clinics an auditable estimate of revenue impact (Δ payment) when recommended ICD-10 or procedure codes would change the MS-DRG result for an inpatient encounter.
+- scope: only applies to encounters classified as inpatient (or other DRG-eligible classes). Outpatient encounters are ignored for DRG processing (unless your org later wants APC grouping — out of scope for this feature).
+- inputs: encounter id, encounter FHIR resource, censored relevant text, inferred ICD-10 list (existing + recommended), inferred ICD-10-PCS (if available), inferred procedures (SNOMED → candidate ICD-10-PCS), optional base rate (defaults to configurable national base).
+- outputs: DRG before, DRG after, old weight, new weight, delta weight, estimated revenue delta, reason / evidence links (which codes changed and supporting text), audit log entry id.
+
+---
+
+## high-level flow (where to hook into pipeline)
+
+1. after: `InferICD10` and `InferSNOMEDCT` and `SNOMED→CPT/PCS crosswalk`
+2. place DRG step BEFORE final persistence of suggested codes and before presenting revenue estimate to user
+3. steps:
+   - detect encounter type (inpatient?) using Encounter.class / type / serviceType
+   - if not DRG-eligible → skip DRG step and mark in audit
+   - otherwise:
+     - build two code sets:
+       • baseline codes = ICD-10s present in Encounter/Claim or provider-billed codes (if available)
+       • proposed codes = baseline codes ∪ LLM/recommender-suggested ICD-10s (and inferred PCS if any)
+     - call open MS-DRG grouper with baseline codes → get old DRG + old weight
+     - call grouper with proposed codes → get new DRG + new weight
+     - compute Δpayment = (new_weight − old_weight) × base_rate × modifiers (optional)
+     - store results, evidence and rationale in DB; surface to user with confidence and audit trail
+
+---
+
+## detailed requirements
+
+### 1. encounter eligibility detection
+- use the FHIR `Encounter` resource:
+  - check `Encounter.class.coding.code` (common values):
+    - `IMP` / `inpatient` / class codes used by source → treat as inpatient
+    - `AMB`, `EMER`, etc. → treat as non-DRG
+  - fallback: inspect `Encounter.type` / `serviceType` for keywords (`inpatient`, `admit`, `hospital`)
+- acceptance rule: if Encounter indicates inpatient or contains an inpatient admission period, mark DRG-eligible = true; else eligible = false.
+
+### 2. inputs and canonicalization
+- required input fields for DRG calculation:
+  - encounter_id (string)
+  - patient_id (string)
+  - date_of_service / admit_date (ISO)
+  - baseline_icd10_codes: list of { code: "I10", present_in_claim: boolean, source: "Encounter/Condition/Claim" }
+  - proposed_icd10_codes: list of { code: "I10", justification: string, source: "LLM" }
+  - baseline_icd10_pcs (optional): list of ICD-10-PCS procedures (if available)
+  - proposed_icd10_pcs (optional): list inferred from SNOMED → ICD-10-PCS crosswalk
+  - base_rate (optional numeric): default from config if not provided
+- canonicalization actions:
+  - deduplicate codes (case-insensitive)
+  - normalize code formatting (strip dots/spaces), validate against ICD-10 pattern
+  - mark codes with confidence, source, and textual evidence (span offsets or note excerpt)
+
+### 3. grouper integration (open CMS-based)
+- preferred implementation: use CMS MS-DRG logic files (downloaded from CMS for chosen fiscal year) or a maintained open-source grouper library (validated against CMS).
+- design a thin adapter `drg_grouper_adapter` with the following interface:
+
+```python
+class DrgGrouperAdapter:
+    def load_rules(self, rules_path: str) -> None
+    def group(self, icd10_diagnoses: List[str], icd10_pcs_procedures: List[str]=[]) -> {
+        "drg_code": "177",
+        "drg_description": "Respiratory Infections w CC",
+        "weight": 1.52,
+        "version": "MS-DRG v42",
+        "explanations": [
+            {"rule": "MDC 04 selection", "evidence": ["J44.1", "R06.02"], "impact": "selected drg 177"}
+        ]
+    }
+```
+- implementation notes:
+  - use CMS-provided relative weight table to return numeric weight for each DRG
+  - include the version/date of the CMS logic used
+  - include the minimal rationale text to support how the grouper arrived at the DRG (e.g., “MCC present: R65.21 found”)
+
+### 4. DRG delta calculation
+- calculation steps:
+  1. old = grouper.group(baseline_icd10, baseline_pcs)
+  2. new = grouper.group(proposed_icd10, proposed_pcs)
+  3. delta_weight = new.weight - old.weight
+  4. delta_payment = delta_weight × base_rate
+  5. apply optional multipliers:
+     - wage_index (if configured per facility)
+     - hospital-specific adjustments (teaching, IME, DSH) — optional config
+- default behavior:
+  - if facility-specific adjustments not supplied, show unadjusted estimate using base_rate
+  - show both raw delta and adjusted delta if facility params provided
+
+### 5. evidence & audit
+- for each recommended ICD code that changes the DRG, store:
+  - code, description, confidence, source (LLM/InferICD)
+  - text excerpt (Relevant Text) and character offsets supporting presence
+  - match between code text and DocumentReference span (if available)
+- store grouper outputs (old/new) with `version`, `ruleset`, and `timestamp`
+- produce a human-readable audit summary like:
+  - "Adding R06.03 (acute respiratory distress) converted DRG 179 → 177, weight 1.0 → 1.5, Δ = $3,000 (base $6,000). Evidence: 'patient with acute respiratory distress' at Assessment section."
+
+### 6. UX / API surfaces
+- backend API endpoint: `POST /api/v1/encounters/{id}/drg-evaluate`
+  - body: optional `base_rate`, `facility_params`
+  - returns:
+    ```json
+    {
+      "encounter_id": "...",
+      "eligible": true,
+      "old_drg": {"code": "179", "desc":"Respiratory ...", "weight":1.0},
+      "new_drg": {"code": "177", "desc":"Respiratory ... w CC", "weight":1.5},
+      "delta_weight": 0.5,
+      "delta_payment": 3000.0,
+      "evidence": [
+        {"code":"R06.03","justification":"Found in Assessment section: 'acute respiratory distress'","confidence":0.78}
+      ],
+      "grouper_version": "MS-DRG v42",
+      "audit_log_id": "audit-123"
+    }
+    ```
+- UI cards:
+  - show DRG delta prominently only for inpatient encounters
+  - show evidence excerpt and link to full note and LLM justification
+  - allow user to "accept suggested diagnosis and update claim" (workflow integration)
+
+### 7. storage and db schema suggestions
+- `drg_evaluations` table:
+  - id (uuid)
+  - encounter_id
+  - eligible (bool)
+  - old_drg_code, old_drg_weight
+  - new_drg_code, new_drg_weight
+  - delta_weight, delta_payment
+  - base_rate_used
+  - grouper_version
+  - evidence_json (JSONB)
+  - created_by (system/user)
+  - created_at, updated_at
+- link `drg_evaluations.audit_log_id` to the main pipeline audit table for traceability
+
+### 8. validation and business rules
+- do not present DRG revenue estimates as final — always label them "estimate" and include grouper version
+- require human review / CDI confirmation before submitting an updated claim
+- enforce a minimum confidence threshold for adding a code to proposed set for grouping (configurable; default 0.3). However, allow "force evaluate" for analysts, but mark in audit.
+- if proposed codes include ICD-10 codes that are mutually exclusive with baseline principal diagnosis, flag for manual review
+
+### 9. edge cases & error handling
+- missing baseline codes: if provider-billed codes not present, treat baseline as empty and compute grouping from existing Conditions (if present); otherwise abort with "insufficient baseline codes" message
+- code normalization failure: if any code fails validation, return error with list of problematic codes
+- grouper exception: if grouper fails or unrecognized DRG, capture stack trace in audit and return `eligible:true, error:"grouper_failure"`
+- conflicting facility params: if wage_index or multipliers are invalid, ignore and compute raw delta with warning
+
+### 10. performance & scaling
+- cache loaded CMS rules in memory or warm container at service startup for fast grouping
+- group operations should be fast (<200ms typical) for single-encounter operation; allow batched grouping for bulk evaluations
+- design grouper to be re-entrant and thread-safe for concurrent requests
+
+### implementation tasks (developer checklist)
+
+1. integrate or implement `DrgGrouperAdapter` using one of:
+   - CMS rules + custom grouper (recommended for full transparency)
+   - open-source implementation validated against CMS
+2. implement encounter eligibility detection logic and unit tests
+3. add DRG evaluation service that accepts baseline & proposed code sets
+4. compute delta_payment with configurable base rate and optional facility multipliers
+5. persist results to `drg_evaluations` table and link to encounter record
+6. expose REST API `POST /encounters/{id}/drg-evaluate` with idempotent semantics
+7. add UI card (or API response) to present results with evidence and links
+8. add unit tests and integration tests using Synthea encounters:
+   - test inpatient encounter where adding diagnosis produces DRG change
+   - test outpatient skip
+   - test error and invalid codes
+9. add monitoring and alerting for grouper errors and long latencies
+
+### test data & validation guidance
+
+- use Synthea FHIR R4 bundles for inpatient encounters with Condition, Procedure and DocumentReference
+- create test scenarios:
+  1. baseline: inpatient encounter with pneumonia only → DRG X
+  2. proposed: add acute respiratory distress (R06.03 or appropriate code) → DRG Y
+  3. expected: new weight > old weight; delta_payment > 0
+- validate grouper outputs against CMS sample grouping examples (sanity checks)
+- add unit tests to assert audit entry created and evidence links exist
+
+### acceptance criteria
+
+- [ ] DRG step executes only for DRG-eligible encounters
+- [ ] Adapter returns both DRG code and numeric weight; version string included
+- [ ] Delta payment computed correctly using (new_weight − old_weight) × base_rate
+- [ ] Evidence for every code that caused DRG change is persisted and shown in response
+- [ ] API and DB entries created with proper audit info
+- [ ] Tests pass for Synthea-based scenarios (inpatient DRG-change, outpatient skip, invalid codes)
+- [ ] Performance: single grouping call under 500ms in typical environment
+
+### security & compliance notes
+
+- all clinical text used to justify codes must be PHI-stripped before sending outside your HIPAA boundary
+- keep grouper and DRG evidence in encrypted storage and accessible only to authorized roles
+- ensure logs do not write raw PHI (only code IDs and censored excerpts)
+
+### example pseudocode
+
+```python
+def evaluate_drg(encounter_id, baseline_icd10, proposed_icd10, baseline_pcs=[], proposed_pcs=[], base_rate=None):
+    encounter = db.get_encounter(encounter_id)
+    if not is_drg_eligible(encounter):
+        return {"eligible": False, "reason": "Encounter not inpatient"}
+    baseline = normalize_codes(baseline_icd10)
+    proposed = normalize_codes(list(set(baseline) | set(proposed_icd10)))
+    old = drg_grouper.group(baseline, baseline_pcs)
+    new = drg_grouper.group(proposed, proposed_pcs)
+    rate = base_rate or config.DEFAULT_BASE_RATE
+    delta_weight = new['weight'] - old['weight']
+    delta_payment = delta_weight * rate
+    audit_id = audit.save({...})
+    result = { "encounter_id": encounter_id, "eligible": True, "old": old, "new": new, "delta_weight": delta_weight, "delta_payment": delta_payment, "audit_id": audit_id }
+    db.save_drg_evaluation(result)
+    return result
+```
+
+### closing notes
+This feature gives a measurable and auditable estimate of revenue opportunity when diagnosis coding changes would affect inpatient DRG. It is critical to treat these outputs as estimates and to surface all evidence and grouper versions to users and auditors. Implement incrementally: first a prototype using open CMS rules and a fixed base rate, then add facility-specific adjustments and UI polish once validated.

@@ -1,0 +1,40 @@
+{
+  "name": "@revrx/sdk",
+  "version": "0.1.0",
+  "description": "Official JavaScript/Node.js SDK for the Post-Facto Coding Review API",
+  "main": "src/index.js",
+  "types": "types/index.d.ts",
+  "scripts": {
+    "test": "jest",
+    "lint": "eslint src/"
+  },
+  "keywords": [
+    "revrx",
+    "healthcare",
+    "medical-coding",
+    "icd",
+    "cpt",
+    "hipaa",
+    "api-client"
+  ],
+  "author": "RevRx <support@revrx.com>",
+  "license": "PROPRIETARY",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/revrx/revrx-javascript"
+  },
+  "bugs": {
+    "url": "https://github.com/revrx/revrx-javascript/issues"
+  },
+  "homepage": "https://docs.revrx.com",
+  "dependencies": {
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.0.0",
+    "jest": "^29.0.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

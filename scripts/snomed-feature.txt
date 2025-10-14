@@ -1,0 +1,95 @@
+# AI Medical Coding MVP - Feature Summary
+
+This document summarizes the feature set for the current post-facto coding MVP, including recent updates for SNOMED → CPT crosswalking and relevant context extraction.
+
+---
+
+## 1. HIPAA-Compliant File Upload
+
+- Users can upload clinical notes (single or bulk files).  
+- All files are uploaded to an **encrypted S3 bucket** with encryption in transit and at rest.  
+- Uploaded files are **deleted after processing**, leaving only redacted and structured outputs.  
+- **Duplicate detection:** The system flags files that were previously uploaded.
+
+---
+
+## 2. PHI Detection and Redaction
+
+- Uses **Amazon Comprehend Medical `DetectPHI`** to identify and remove Protected Health Information.  
+- Redacted text is stored for further analysis; original raw files are deleted.  
+- Ensures HIPAA compliance while preserving clinically relevant content.
+
+---
+
+## 3. Structured Clinical Data Extraction
+
+- **Diagnoses:** `InferICD10CM` extracts ICD-10-CM codes from redacted text.  
+- **Procedures:** `InferSNOMEDCT` extracts procedure concepts.  
+- Optional: `DetectEntitiesV2` can extract additional context like medications or tests for enhanced LLM reasoning.  
+
+---
+
+## 4. SNOMED → CPT Crosswalk
+
+- Procedures extracted via `InferSNOMEDCT` are mapped to **possible CPT codes** using a **CMS-provided crosswalk table**.  
+- Crosswalk is deterministic and cached in the application for performance.  
+- CPT suggestions are used as **input to the LLM** rather than generating from free text alone.
+
+---
+
+## 5. Relevant Context Extraction
+
+- The system extracts **only the portions of the clinical note relevant for billing**:
+  - Option A: Based on **entity offsets** from Comprehend Medical.  
+  - Option B: Optional summarization via LLM to capture complex contextual relationships.  
+- This minimizes unnecessary data exposure and reduces LLM processing costs.
+
+---
+
+## 6. LLM-Based Post-Facto Coding Review
+
+- Input to the LLM includes:
+  - Redacted text
+  - Extracted ICD-10 codes
+  - Procedures with CPT suggestions
+  - Relevant context snippets  
+- LLM output:
+  - Suggested additional CPT codes
+  - Missed ICD-10 codes
+  - Justifications for suggested codes in human-readable format
+  - Revenue optimization insights
+- Output format is **strict YAML or JSON schema** for validation.
+
+---
+
+## 7. Bulk Upload and Traceability
+
+- Supports **bulk file uploads**.  
+- Each processed encounter is **traceable back to the original uploaded file** via unique identifiers.  
+- Duplicate uploads are flagged and optionally ignored or merged.
+
+---
+
+## 8. Security and Data Retention
+
+- **Encryption:** All text and structured data are encrypted in transit and at rest.  
+- **Retention:** Only redacted and structured outputs are stored; raw files are deleted.  
+- **Deletion after processing:** Users can optionally trigger deletion of all stored outputs.  
+- **Prompt injection mitigation:** Input text is sanitized, structured, and/or summarized to prevent malicious instructions from affecting the LLM.
+
+---
+
+## 9. Subscription and Payment Integration
+
+- Users enter payment information to access a **7-day free trial**.  
+- Subscription auto-renews at **$100/month**.  
+- Payment portal integrates with Stripe (or equivalent), securely storing only necessary payment metadata.  
+
+---
+
+## 10. Optional Enhancements (Low-Lift)
+
+- Automatic detection of **overcoding or undercoding** based on historical billing patterns.  
+- Explanation layer for LLM output: links suggested codes to **relevant note snippets**.  
+- Metrics dashboard: estimated revenue saved from coding corrections.  
+- Audit logging for all processing steps to maintain traceability and compliance.

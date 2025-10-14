@@ -1,0 +1,63 @@
+# Feature Expansion List for Post-Facto Coding Review MVP
+
+This document outlines additional features that can be implemented primarily through prompt engineering and minor UI changes, leveraging the existing HIPAA-compliant pipeline. Each feature builds on the current workflow: file upload → PHI removal → text extraction → LLM analysis → suggested codes output.
+
+---
+
+## 1. Documentation quality checks
+- **Description:** The system will analyze clinical notes for missing elements that could justify higher-value codes (e.g., exam components, time documentation, HPI details).  
+- **Implementation:** Extend the LLM prompt to request:  
+  *“Identify any missing documentation that may prevent billing at a higher level. Provide suggestions for improving documentation.”*  
+- **Output:** List of missing or incomplete sections with actionable guidance.
+
+---
+
+## 2. Denial risk predictor (basic)
+- **Description:** Highlight codes that may be at risk of denial if documentation is insufficient.  
+- **Implementation:** Extend the LLM prompt to request:  
+  *“For each billed and suggested code, list common payer denial reasons and whether the note addresses them.”*  
+- **Output:** Table of codes with “Denial Risk: Low/Medium/High” and justification.
+
+---
+
+## 3. Under-coding dashboard (per note level)
+- **Description:** Compare billed codes against suggested codes and quantify potential lost revenue.  
+- **Implementation:** Prompt the LLM to compute RVUs or relative reimbursement differences.  
+- **Output:**  
+  - “Billed codes: … (Total RVUs = X)”  
+  - “Suggested codes: … (Total RVUs = Y)”  
+  - “Potential missed revenue = (Y − X) RVUs”  
+- **UI:** Add a summary widget at the bottom of each review report.
+
+---
+
+## 4. Modifier suggestions
+- **Description:** Suggest when modifiers (e.g., -25, -59) are applicable to support reimbursement for multiple procedures on the same day.  
+- **Implementation:** Extend the LLM prompt:  
+  *“Identify if modifiers should be added to the billed/suggested CPT codes based on documentation.”*  
+- **Output:** Suggested CPT + modifier combination with justification.
+
+---
+
+## 5. Audit log / compliance export
+- **Description:** Generate a structured report that captures all coding suggestions and their justifications for audit purposes.  
+- **Implementation:** Format LLM output into a downloadable PDF or CSV.  
+- **Output:**  
+  - Suggested codes  
+  - Justification text with references to relevant sections of the chart  
+  - Time-stamped metadata (provider, patient ID anonymized, date processed)  
+
+---
+
+## 6. Charge capture reminders
+- **Description:** Detect services documented in the clinical note that do not have a corresponding CPT/ICD code.  
+- **Implementation:** Extend the LLM prompt:  
+  *“Identify clinically significant services or procedures documented but not linked to any billing codes. Suggest the appropriate code(s).”*  
+- **Output:** List of “uncaptured services” with suggested codes.
+
+---
+
+## Development Notes
+- All features are prompt-driven and do not require new external data sources or EHR integration.  
+- Outputs should be formatted consistently (tables or structured YAML/JSON) to facilitate downstream use.  
+- Compliance and security (PHI redaction, encryption) follow the existing workflow.  

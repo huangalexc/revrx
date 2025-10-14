@@ -1,0 +1,124 @@
+# Clinical Note Test Cases for Expanded Features
+
+Each test case includes the **input note**, **provider’s billed codes**, and the **expected LLM outputs** (feature flags, suggestions, or justifications).
+
+---
+
+## Test Case 1: Missing Documentation → Downcoding
+**Input Clinical Note:**  
+> Patient presents for follow-up on hypertension. BP recorded as 150/95.  
+> Assessment: Hypertension, uncontrolled.  
+> Plan: Continue lisinopril, follow up in 6 months.  
+
+**Provider Billed Codes:**  
+- 99214 (Level 4 established patient visit)
+
+**Expected Output:**  
+- **Feature Flag:** Missing documentation elements  
+- **Suggestion:** Consider 99213 unless more HPI/ROS/exam elements are documented  
+- **Justification:** Level 4 requires more detailed documentation
+
+---
+
+## Test Case 2: Denial Risk → Unsupported Imaging
+**Input Clinical Note:**  
+> Patient reports chronic low back pain for several years. Exam: Limited lumbar flexion.  
+> Assessment: Chronic low back pain.  
+> Plan: Prescribed PT.  
+
+**Provider Billed Codes:**  
+- 72110 (lumbar spine x-ray, 4 views)
+
+**Expected Output:**  
+- **Feature Flag:** High denial risk  
+- **Suggestion:** Add documentation of medical necessity (e.g., trauma, red flags, neurologic deficits)  
+- **Justification:** Imaging likely to be denied without supporting documentation
+
+---
+
+## Test Case 3: Under-Coding → Missed Higher-Level Visit
+**Input Clinical Note:**  
+> Patient presents with uncontrolled diabetes, hypertension, and chronic kidney disease.  
+> ROS: Multiple systems positive.  
+> Exam: Cardio, renal, neuro documented.  
+> Time spent: 45 minutes counseling and coordinating care.  
+
+**Provider Billed Codes:**  
+- 99213 (Level 3 established patient visit)
+
+**Expected Output:**  
+- **Feature Flag:** Under-coded  
+- **Suggestion:** Code supports 99215 (Level 5) based on time and complexity  
+- **Justification:** 45 minutes + high complexity medical decision making documented
+
+---
+
+## Test Case 4: Modifier Needed → Same-Day Procedure
+**Input Clinical Note:**  
+> Patient presents with otitis media. Ear lavage performed.  
+> Prescribed amoxicillin.  
+
+**Provider Billed Codes:**  
+- 99213 (office visit)  
+- 69210 (ear lavage)
+
+**Expected Output:**  
+- **Feature Flag:** Modifier required  
+- **Suggestion:** Add modifier `-25` to 99213  
+- **Justification:** E/M visit and procedure billed on same day
+
+---
+
+## Test Case 5: Audit Defense → Supporting Text
+**Input Clinical Note:**  
+> Patient presents with chest pain.  
+> History: exertional, radiates to left arm, associated with shortness of breath.  
+> Exam: Abnormal ECG.  
+> Assessment: Suspected angina.  
+> Plan: Sent to ED for further evaluation.  
+
+**Provider Billed Codes:**  
+- 99215 (Level 5 established patient visit)
+
+**Expected Output:**  
+- **Feature Flag:** Audit log export  
+- **Output:** Highlighted justification (HPI, ROS, exam, MDM)  
+- **Justification:** Documentation supports high complexity coding
+
+---
+
+## Test Case 6: Missing Charge Capture → Ancillary Services
+**Input Clinical Note:**  
+> Patient presents for annual physical.  
+> Vitals taken, labs ordered, full exam documented.  
+> Assessment: Well adult exam.  
+> Plan: Routine labs (CBC, CMP, lipid panel).  
+
+**Provider Billed Codes:**  
+- 99396 (annual well exam)
+
+**Expected Output:**  
+- **Feature Flag:** Uncaptured service  
+- **Suggestion:** Add venipuncture code 36415  
+- **Justification:** Labs documented but associated service not billed
+
+---
+
+## Test Case 7: Negative Control → Correct Coding
+**Input Clinical Note:**  
+> Patient presents with URI symptoms for 3 days.  
+> HPI: Cough, congestion, sore throat, denies fever or shortness of breath.  
+> ROS: 5 systems reviewed.  
+> Exam: Mild pharyngeal erythema, normal lungs, normal vitals.  
+> Assessment: Viral URI.  
+> Plan: Supportive care, fluids, OTC meds, return if symptoms worsen.  
+
+**Provider Billed Codes:**  
+- 99213 (Level 3 established patient visit)
+
+**Expected Output:**  
+- **Feature Flag:** None  
+- **Suggestion:** None — coding and documentation appropriate  
+- **Justification:** Documentation fully supports billed code, no changes needed
+
+---
