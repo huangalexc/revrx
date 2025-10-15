@@ -12,10 +12,8 @@ import { useAuthStore } from '@/store/authStore';
  * rehydrates from localStorage (client-side).
  */
 export function CookieSync() {
-  const token = useAuthStore((state) => state.token);
-
   useEffect(() => {
-    // On mount, check if we have a token in localStorage but not in cookie
+    // On mount, restore cookie from localStorage if needed
     const storedToken = localStorage.getItem('auth_token');
 
     if (storedToken) {
@@ -24,14 +22,12 @@ export function CookieSync() {
         (item) => item.trim().startsWith('auth_token=')
       );
 
-      // If no cookie but we have localStorage token, restore the cookie
+      // If no cookie but we have localStorage token, restore it
       if (!hasCookie) {
-        const maxAge = 604800; // 7 days in seconds
-        document.cookie = `auth_token=${storedToken}; path=/; max-age=${maxAge}; SameSite=Lax`;
-        console.log('[CookieSync] Restored auth cookie from localStorage');
+        document.cookie = `auth_token=${storedToken}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax; Secure=${process.env.NODE_ENV === 'production'}`;
       }
     }
-  }, [token]);
+  }, []); // Run only once on mount
 
   return null; // This component doesn't render anything
 }

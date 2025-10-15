@@ -53,7 +53,7 @@ def mock_comprehend():
         ]
 
         # Mock medical entities
-        mock.detect_entities_v2.return_value = [
+        mock.detect_entities.return_value = [
             Mock(
                 text="diabetes",
                 category="MEDICAL_CONDITION",
@@ -97,7 +97,7 @@ def mock_openai():
         mock_coding_result.total_incremental_revenue = 100.0
         mock_coding_result.model_used = "gpt-4o-mini"
 
-        mock.analyze_clinical_note_v2.return_value = mock_coding_result
+        mock.analyze_clinical_note.return_value = mock_coding_result
 
         yield mock
 
@@ -303,7 +303,7 @@ class TestProcessReportAsync:
         mock_prisma.billingcode.find_many = AsyncMock(return_value=[])
 
         # Make AI analysis fail (critical step)
-        mock_openai.analyze_clinical_note_v2.side_effect = Exception("AI error")
+        mock_openai.analyze_clinical_note.side_effect = Exception("AI error")
 
         # Execute
         await process_report_async("report-123")
@@ -391,7 +391,7 @@ class TestProcessReportAsync:
         mock_prisma.billingcode.find_many = AsyncMock(return_value=[])
 
         # Make AI fail
-        mock_openai.analyze_clinical_note_v2.side_effect = Exception("Transient error")
+        mock_openai.analyze_clinical_note.side_effect = Exception("Transient error")
 
         # Execute with max_retries=3
         await process_report_async("report-123", max_retries=3)

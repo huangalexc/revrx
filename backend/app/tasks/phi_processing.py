@@ -490,61 +490,62 @@ async def process_encounter_phi(encounter_id: str) -> None:
 
         logger.info("PHI processing and code extraction complete", encounter_id=encounter_id)
 
-        # Step 6.6: Extract billed codes from clinical text (file upload workflow only)
+        # Step 6.6: Extract billed codes from LLM filtering result (file upload workflow only)
         # For FHIR workflow, billed codes are extracted from Claims resources
         if encounter.encounterSource != enums.EncounterSource.FHIR:
-            logger.info("Extracting billed codes from clinical text", encounter_id=encounter_id)
+            logger.info("Extracting billed codes from LLM filtering result", encounter_id=encounter_id)
 
             try:
-                from app.services.code_extraction import extract_billed_codes
+                # Get billed codes from the filtering_result (already extracted by GPT-4o-mini)
+                billed_codes = filtering_result.get("billed_codes", []) if filtering_result else []
 
-                billed_codes = await extract_billed_codes(
-                    clinical_text=extracted_text,  # Use original text (not de-identified)
-                    encounter_id=encounter_id,
-                    only_billed=True  # Only extract codes with "billed" context
-                )
+                if billed_codes:
+                    # Store billed codes in BillingCode table
+                    for code_dict in billed_codes:
+                        try:
+                            await prisma.billingcode.create(
+                                data={
+                                    "encounterId": encounter_id,
+                                    "code": code_dict["code"],
+                                    "codeType": code_dict["code_type"],
+                                    "description": code_dict.get("description"),
+                                }
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to store billed code",
+                                encounter_id=encounter_id,
+                                code=code_dict["code"],
+                                error=str(e)
+                            )
 
-                # Store billed codes in BillingCode table
-                for code_dict in billed_codes:
-                    try:
-                        await prisma.billingcode.create(
-                            data={
-                                "encounterId": encounter_id,
-                                "code": code_dict["code"],
-                                "codeType": code_dict["code_type"],
-                                "description": code_dict.get("description"),
-                                "source": "EXTRACTED_FROM_TEXT",
-                            }
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to store billed code",
-                            encounter_id=encounter_id,
-                            code=code_dict["code"],
-                            error=str(e)
-                        )
+                    logger.info(
+                        "Billed codes extracted and stored",
+                        encounter_id=encounter_id,
+                        billed_code_count=len(billed_codes)
+                    )
 
-                logger.info(
-                    "Billed codes extracted and stored",
-                    encounter_id=encounter_id,
-                    billed_code_count=len(billed_codes)
-                )
-
-                # Audit log: Billed codes extracted
-                await create_audit_log(
-                    action="BILLED_CODES_EXTRACTED",
-                    user_id=encounter.userId,
-                    resource_type="BillingCode",
-                    resource_id=encounter_id,
-                    metadata={
-                        "billed_code_count": len(billed_codes),
-                        "extraction_method": "REGEX_TEXT_EXTRACTION",
-                    },
-                )
+                    # Audit log: Billed codes extracted
+                    await create_audit_log(
+                        action="BILLED_CODES_EXTRACTED",
+                        user_id=encounter.userId,
+                        resource_type="BillingCode",
+                        resource_id=encounter_id,
+                        metadata={
+                            "billed_code_count": len(billed_codes),
+                            "extraction_method": "LLM_EXTRACTION",
+                            "codes": [f"{c['code_type']}:{c['code']}" for c in billed_codes],
+                        },
+                    )
+                else:
+                    logger.info(
+                        "No billed codes found in clinical text",
+                        encounter_id=encounter_id
+                    )
 
             except Exception as e:
                 logger.warning(
-                    "Failed to extract billed codes from text",
+                    "Failed to extract billed codes from LLM result",
                     encounter_id=encounter_id,
                     error=str(e)
                 )

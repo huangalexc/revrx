@@ -122,7 +122,7 @@ async def _process_encounter_async(encounter_id: str) -> Dict[str, Any]:
 
         # 4. Analyze with AI (using 2-prompt approach for reliability)
         logger.info("Analyzing with AI", encounter_id=encounter_id)
-        ai_result = await openai_service.analyze_clinical_note_v2(
+        ai_result = await openai_service.analyze_clinical_note(
             clinical_note=deidentified_text,
             billed_codes=billed_codes,
         )

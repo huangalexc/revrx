@@ -4,6 +4,7 @@ Loads and validates environment variables
 """
 
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from typing import List
 
 
@@ -74,7 +75,7 @@ class Settings(BaseSettings):
     CELERY_RESULT_EXPIRES: int = 3600  # 1 hour
 
     # CORS
-    CORS_ORIGINS: List[str] = ["http://localhost:3000"]
+    CORS_ORIGINS: List[str] = ["*"]  # Allow all origins in development
 
     # File Upload Limits
     MAX_FILE_SIZE_MB: int = 5

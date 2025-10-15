@@ -238,7 +238,7 @@ export default function ReportDetailPage() {
             <ProcessingStatus
               encounterId={encounterId}
               currentStatus={reportData.status.toLowerCase() as 'pending' | 'processing'}
-              processingTime={reportData.metadata.processing_time_ms ? reportData.metadata.processing_time_ms / 1000 : undefined}
+              processingTime={reportData.metadata?.processing_time_ms ? reportData.metadata.processing_time_ms / 1000 : undefined}
             />
           )}
 
@@ -467,7 +467,7 @@ export default function ReportDetailPage() {
                   {reportData.status}
                 </p>
               </div>
-              {reportData.metadata.processing_time_ms && (
+              {reportData.metadata?.processing_time_ms && (
                 <div>
                   <span className="text-gray-600">Processing Time</span>
                   <p className="font-semibold text-gray-900">
@@ -475,7 +475,7 @@ export default function ReportDetailPage() {
                   </p>
                 </div>
               )}
-              {reportData.code_analysis.ai_model && (
+              {reportData.code_analysis?.ai_model && (
                 <div>
                   <span className="text-gray-600">AI Model</span>
                   <p className="font-semibold text-gray-900">
@@ -483,12 +483,14 @@ export default function ReportDetailPage() {
                   </p>
                 </div>
               )}
-              <div>
-                <span className="text-gray-600">Confidence Score</span>
-                <p className="font-semibold text-gray-900">
-                  {Math.round(reportData.code_analysis.confidence_score * 100)}%
-                </p>
-              </div>
+              {reportData.code_analysis?.confidence_score !== undefined && (
+                <div>
+                  <span className="text-gray-600">Confidence Score</span>
+                  <p className="font-semibold text-gray-900">
+                    {Math.round(reportData.code_analysis.confidence_score * 100)}%
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 

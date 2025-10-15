@@ -37,10 +37,10 @@ async def main():
 
     # Step 1: Extract medical entities
     print("\n" + "=" * 80)
-    print("STEP 1: DETECT ENTITIES V2")
+    print("STEP 1: DETECT ENTITIES")
     print("=" * 80)
 
-    medical_entities = comprehend_medical_service.detect_entities_v2(TEST_NOTE)
+    medical_entities = comprehend_medical_service.detect_entities(TEST_NOTE)
 
     # Find MEDICAL_CONDITION entities
     medical_conditions = [e for e in medical_entities if e.category == "MEDICAL_CONDITION"]

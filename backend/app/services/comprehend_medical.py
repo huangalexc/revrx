@@ -461,7 +461,7 @@ class ComprehendMedicalService:
             logger.error("Unexpected error during SNOMED CT inference", error=str(e))
             raise
 
-    def detect_entities_v2(self, text: str) -> List[MedicalEntity]:
+    def detect_entities(self, text: str) -> List[MedicalEntity]:
         """
         Detect medical entities in clinical text
 
@@ -497,7 +497,7 @@ class ComprehendMedicalService:
                 text_bytes=text_bytes
             )
 
-            response = self.client.detect_entities_v2(Text=text)
+            response = self.client.detect_entities(Text=text)
 
             entities = []
             for entity_data in response.get("Entities", []):
@@ -561,7 +561,7 @@ class ComprehendMedicalService:
             phi_entities = self.detect_phi(text)
 
             # Detect medical entities
-            medical_entities = self.detect_entities_v2(text)
+            medical_entities = self.detect_entities(text)
 
             result = {
                 "phi_entities": [entity.to_dict() for entity in phi_entities],

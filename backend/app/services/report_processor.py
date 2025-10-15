@@ -292,7 +292,7 @@ async def process_report_async(report_id: str, max_retries: int = 3) -> None:
         # AI analysis fails completely if this times out (not optional)
         try:
             coding_result = await asyncio.wait_for(
-                openai_service.analyze_clinical_note_v2(
+                openai_service.analyze_clinical_note(
                     clinical_note=clinical_text_for_coding,
                     billed_codes=billed_codes_for_llm,
                     extracted_icd10_codes=extracted_icd10_for_llm,

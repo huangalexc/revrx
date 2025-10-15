@@ -201,7 +201,7 @@ async def process_report_async(report_id: str):
 
         # Step 4: AI Analysis (80%)
         await update_progress(report_id, 80, "ai_analysis")
-        ai_result = await openai_service.analyze_clinical_note_v2(
+        ai_result = await openai_service.analyze_clinical_note(
             clinical_note=filtered_text,
             billed_codes=billed_codes,
             extracted_icd10_codes=icd10_codes,

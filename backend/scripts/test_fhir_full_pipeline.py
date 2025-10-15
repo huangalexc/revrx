@@ -417,13 +417,13 @@ async def run_full_coding_pipeline(encounter_id: str, bundle_path: str):
         print(f"\n  Note: These unbilled SNOMED codes are documented in clinical text")
         print(f"        and may represent additional billable procedures.")
 
-    # Use analyze_clinical_note_v2 (2-prompt approach) for better reliability
+    # Use analyze_clinical_note (2-prompt approach) for better reliability
     # This approach splits the analysis into:
     # - Prompt 1: Code identification and suggestions
     # - Prompt 2: Quality and compliance analysis
     # Note: snomed_to_cpt_suggestions requires crosswalk data, so we pass empty list
     # The LLM will still see unbilled procedures in the clinical text
-    analysis_result = await openai_service.analyze_clinical_note_v2(
+    analysis_result = await openai_service.analyze_clinical_note(
         clinical_note=clinical_text_for_coding,
         billed_codes=billed_codes_for_llm,
         extracted_icd10_codes=unbilled_icd10,  # Only send unbilled ICD-10 codes

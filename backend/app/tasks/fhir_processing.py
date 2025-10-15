@@ -384,7 +384,6 @@ async def process_fhir_encounter(
                                 "code": code_dict["code"],
                                 "codeType": code_dict["code_type"],
                                 "description": code_dict.get("description"),
-                                "source": "FHIR_CLAIM",
                             }
                         )
                     except Exception as e:

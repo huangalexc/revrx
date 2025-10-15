@@ -73,7 +73,7 @@ from app.services.comprehend_medical import comprehend_medical_service
 phi_entities = comprehend_medical_service.detect_phi(clinical_text)
 
 # Detect medical entities (conditions, medications, procedures)
-medical_entities = comprehend_medical_service.detect_entities_v2(clinical_text)
+medical_entities = comprehend_medical_service.detect_entities(clinical_text)
 
 # Comprehensive analysis
 result = comprehend_medical_service.analyze_text(clinical_text)

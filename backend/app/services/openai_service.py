@@ -310,11 +310,30 @@ Return a JSON object with:
   "filtered_text": "the filtered clinical text",
   "encounter_type": "the type of encounter (e.g., 'well child visit', 'follow-up', 'new patient', 'post-op', 'urgent care', 'annual physical', 'sick visit', etc.)",
   "provider_placeholder": "the placeholder token for the provider/clinician who rendered the service (e.g., 'NAME_2'), or null if not identifiable",
-  "service_date_placeholder": "the placeholder token for the date of service (e.g., 'DATE_3'), or null if not identifiable"
+  "service_date_placeholder": "the placeholder token for the date of service (e.g., 'DATE_3'), or null if not identifiable",
+  "billed_codes": [
+    {{
+      "code": "the code (e.g., '99393', 'Z00.129')",
+      "code_type": "CPT | ICD10 | HCPCS",
+      "description": "brief description if available"
+    }}
+  ]
 }}
 
 To identify the provider: Look for names associated with signatures, "Added by:", "Provider:", job titles (MD, PA, CPNP, etc.), or clinical documentation.
-To identify service date: Look for dates associated with the encounter, visit date, or "Signed on", not birth dates."""
+To identify service date: Look for dates associated with the encounter, visit date, or "Signed on", not birth dates.
+
+IMPORTANT - Billed Codes Extraction:
+- Extract codes that were ACTUALLY BILLED/CHARGED for this encounter
+- Look for sections like "Billing Codes", "Codes Used", "Billed:", "Charged:", "Submitted Codes"
+- Include CPT procedure codes (5-digit numbers like 99393, 99214)
+- Include ICD-10 diagnosis codes (format: Letter + 2-3 digits like Z00.129, E11.9)
+- Include HCPCS codes if present (Letter + 4 digits like J0585)
+- DO NOT include codes from reference/legend sections (e.g., "ICD 10 Billing Codes - Reference")
+- DO NOT include codes from educational materials or billing guidelines
+- Only extract codes explicitly stated as billed/charged/submitted for THIS encounter
+- If no billed codes can be identified with certainty, return an empty array
+"""
 
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -342,12 +361,14 @@ To identify service date: Look for dates associated with the encounter, visit da
                 encounter_type = response_data.get("encounter_type", None)
                 provider_placeholder = response_data.get("provider_placeholder", None)
                 service_date_placeholder = response_data.get("service_date_placeholder", None)
+                billed_codes = response_data.get("billed_codes", [])
             except json.JSONDecodeError:
                 # Fallback: treat as plain text
                 filtered_text = response_content
                 encounter_type = None
                 provider_placeholder = None
                 service_date_placeholder = None
+                billed_codes = []
                 logger.warning("Failed to parse JSON response from filtering, using as plain text")
 
             # Calculate processing time
@@ -366,6 +387,7 @@ To identify service date: Look for dates associated with the encounter, visit da
                 "encounter_type": encounter_type,
                 "provider_placeholder": provider_placeholder,
                 "service_date_placeholder": service_date_placeholder,
+                "billed_codes": billed_codes,
                 "original_length": original_length,
                 "filtered_length": filtered_length,
                 "reduction_pct": round(reduction_pct, 1),
@@ -380,6 +402,7 @@ To identify service date: Look for dates associated with the encounter, visit da
                 encounter_type=encounter_type,
                 provider_placeholder=provider_placeholder,
                 service_date_placeholder=service_date_placeholder,
+                billed_codes_count=len(billed_codes),
                 original_length=original_length,
                 filtered_length=filtered_length,
                 reduction_pct=round(reduction_pct, 1),
@@ -477,7 +500,7 @@ To identify service date: Look for dates associated with the encounter, visit da
         Prompt 2: Quality & Compliance Analysis
 
         This approach improves reliability for complex encounters by:
-        - Reducing token count per prompt (stays under 2K response)
+        - Reducing token count per prompt (stays under 2000 tokens response)
         - Better error isolation
         - Clearer logical separation
 
@@ -560,10 +583,10 @@ To identify service date: Look for dates associated with the encounter, visit da
             logger.info("Executing Prompt 2: Quality & Compliance")
 
             messages_p2 = [
-                {"role": "system", "content": prompt_templates_v2.get_quality_system_prompt()},
+                {"role": "system", "content": prompt_templates.get_quality_system_prompt()},
                 {
                     "role": "user",
-                    "content": prompt_templates_v2.get_quality_user_prompt(
+                    "content": prompt_templates.get_quality_user_prompt(
                         clinical_note,
                         result_p1.get("billed_codes", []),
                         result_p1.get("suggested_codes", []),

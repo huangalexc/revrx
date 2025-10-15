@@ -29,12 +29,11 @@ export const useAuthStore = create<AuthState>()(
         if (typeof window !== 'undefined') {
           if (token) {
             localStorage.setItem('auth_token', token);
-            // Also set cookie for middleware (7 days)
-            const maxAge = 604800; // 7 days in seconds
-            document.cookie = `auth_token=${token}; path=/; max-age=${maxAge}; SameSite=Lax`;
+            // Set cookie for middleware with proper settings
+            document.cookie = `auth_token=${token}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax; Secure=${process.env.NODE_ENV === 'production'}`;
           } else {
             localStorage.removeItem('auth_token');
-            document.cookie = 'auth_token=; path=/; max-age=0';
+            document.cookie = 'auth_token=; path=/; max-age=0; SameSite=Lax';
           }
         }
         set({ token });
@@ -42,8 +41,7 @@ export const useAuthStore = create<AuthState>()(
       logout: () => {
         if (typeof window !== 'undefined') {
           localStorage.removeItem('auth_token');
-          // Clear the cookie by setting max-age to 0
-          document.cookie = 'auth_token=; path=/; max-age=0';
+          document.cookie = 'auth_token=; path=/; max-age=0; SameSite=Lax';
         }
         set({ user: null, token: null, isAuthenticated: false });
       },

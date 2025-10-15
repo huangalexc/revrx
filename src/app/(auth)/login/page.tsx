@@ -27,42 +27,10 @@ export default function LoginPage() {
       });
 
       const { user, tokens } = response.data;
-      console.log('Login successful, full response:', response.data);
-      console.log('Tokens object:', tokens);
-      console.log('Tokens keys:', Object.keys(tokens));
-      console.log('Access token (accessToken):', tokens.accessToken);
-      console.log('Access token (access_token):', tokens.access_token);
-      console.log('Token type:', typeof tokens.accessToken);
-      console.log('Token length:', tokens.accessToken?.length);
 
-      // Test localStorage is working
-      console.log('localStorage available:', typeof localStorage !== 'undefined');
-      localStorage.setItem('test_key', 'test_value');
-      console.log('Test key saved:', localStorage.getItem('test_key'));
-
-      // Manually save to localStorage FIRST
-      const saveResult = localStorage.setItem('auth_token', tokens.accessToken);
-      console.log('setItem returned:', saveResult);
-      console.log('Token manually saved to localStorage');
-
-      // Check immediately
-      const checkToken1 = localStorage.getItem('auth_token');
-      console.log('Immediate check - token exists:', !!checkToken1);
-      console.log('Immediate check - token value:', checkToken1?.substring(0, 20));
-
+      // Set user and token (store will handle localStorage and cookie)
       setUser(user);
       setToken(tokens.accessToken);
-
-      // Verify it was saved after zustand
-      const savedToken = localStorage.getItem('auth_token');
-      console.log('After zustand - Token saved to localStorage:', !!savedToken);
-      console.log('After zustand - Saved token matches:', savedToken === tokens.accessToken);
-      console.log('After zustand - All keys:', Object.keys(localStorage));
-
-      // Set cookie for middleware (max-age in seconds, default to 7 days)
-      const maxAge = tokens.expiresIn || 604800; // 7 days in seconds
-      document.cookie = `auth_token=${tokens.accessToken}; path=/; max-age=${maxAge}; SameSite=Lax`;
-      console.log('Cookie set with max-age:', maxAge);
 
       router.push('/encounters/new');
     } catch (err: any) {
