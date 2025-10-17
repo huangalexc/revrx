@@ -69,7 +69,6 @@ export default function EncountersPage() {
       );
 
       const { encounter_id } = response.data;
-      setEncounterId(encounter_id);
 
       updateStepStatus('note', 'complete');
       updateStepStatus('extract', 'complete');

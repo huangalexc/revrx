@@ -321,6 +321,33 @@ async def process_encounter_phi(encounter_id: str) -> None:
                 error=str(e)
             )
 
+        # Step 6.44: Extract additional medical entities (BEFORE crosswalk)
+        logger.info("Extracting additional medical entities", encounter_id=encounter_id)
+
+        medical_entities = []
+        try:
+            medical_entities = comprehend_medical_service.detect_entities_v2(clinical_text_for_coding)
+
+            # Group entities by category for logging
+            entities_by_category = {}
+            for entity in medical_entities:
+                if entity.category not in entities_by_category:
+                    entities_by_category[entity.category] = 0
+                entities_by_category[entity.category] += 1
+
+            logger.info(
+                "Medical entities extracted",
+                encounter_id=encounter_id,
+                total_entity_count=len(medical_entities),
+                entities_by_category=entities_by_category
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to extract medical entities",
+                encounter_id=encounter_id,
+                error=str(e)
+            )
+
         # Step 6.45: Perform SNOMED to CPT crosswalk
         logger.info("Performing SNOMED to CPT crosswalk", encounter_id=encounter_id)
 
@@ -409,33 +436,6 @@ async def process_encounter_phi(encounter_id: str) -> None:
         except Exception as e:
             logger.warning(
                 "Failed to perform SNOMED to CPT crosswalk",
-                encounter_id=encounter_id,
-                error=str(e)
-            )
-
-        # Step 6.45: Extract additional medical entities (medications, tests, etc.)
-        logger.info("Extracting additional medical entities", encounter_id=encounter_id)
-
-        medical_entities = []
-        try:
-            medical_entities = comprehend_medical_service.detect_entities_v2(clinical_text_for_coding)
-
-            # Group entities by category for logging
-            entities_by_category = {}
-            for entity in medical_entities:
-                if entity.category not in entities_by_category:
-                    entities_by_category[entity.category] = 0
-                entities_by_category[entity.category] += 1
-
-            logger.info(
-                "Medical entities extracted",
-                encounter_id=encounter_id,
-                total_entity_count=len(medical_entities),
-                entities_by_category=entities_by_category
-            )
-        except Exception as e:
-            logger.warning(
-                "Failed to extract medical entities",
                 encounter_id=encounter_id,
                 error=str(e)
             )
@@ -613,32 +613,40 @@ async def process_encounter_phi(encounter_id: str) -> None:
         )
 
         # Step 7: Delete original file from S3 (HIPAA requirement)
-        logger.info("Deleting original file from S3", file_path=file_path)
-        await storage_service.delete_file(file_path)
+        # Skip deletion for text input (file_path starts with "text://")
+        if not file_path.startswith("text://"):
+            logger.info("Deleting original file from S3", file_path=file_path)
+            await storage_service.delete_file(file_path)
 
-        # Update uploaded file record to indicate deletion
-        await prisma.uploadedfile.update(
-            where={"id": uploaded_file.id},
-            data={
-                "filePath": f"deleted://{encounter_id}/{uploaded_file.fileName}",
-            }
-        )
+            # Update uploaded file record to indicate deletion
+            await prisma.uploadedfile.update(
+                where={"id": uploaded_file.id},
+                data={
+                    "filePath": f"deleted://{encounter_id}/{uploaded_file.fileName}",
+                }
+            )
 
-        logger.info("Original file deleted from S3", encounter_id=encounter_id)
+            logger.info("Original file deleted from S3", encounter_id=encounter_id)
 
-        # Audit log: File deletion (HIPAA compliance)
-        await create_audit_log(
-            action="FILE_DELETED",
-            user_id=encounter.userId,
-            resource_type="UploadedFile",
-            resource_id=uploaded_file.id,
-            metadata={
-                "encounter_id": encounter_id,
-                "original_file_path": file_path,
-                "file_name": uploaded_file.fileName,
-                "reason": "HIPAA_COMPLIANCE_PHI_REMOVAL",
-            },
-        )
+            # Audit log: File deletion (HIPAA compliance)
+            await create_audit_log(
+                action="FILE_DELETED",
+                user_id=encounter.userId,
+                resource_type="UploadedFile",
+                resource_id=uploaded_file.id,
+                metadata={
+                    "encounter_id": encounter_id,
+                    "original_file_path": file_path,
+                    "file_name": uploaded_file.fileName,
+                    "reason": "HIPAA_COMPLIANCE_PHI_REMOVAL",
+                },
+            )
+        else:
+            logger.info(
+                "Skipping S3 deletion for text input",
+                encounter_id=encounter_id,
+                file_path=file_path
+            )
 
         # Step 8: Update encounter status to COMPLETED
         processing_end_time = datetime.utcnow()

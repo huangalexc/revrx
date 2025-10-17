@@ -8,7 +8,6 @@ import {
   Tab,
   Card,
   CardBody,
-  Textarea,
   Button,
   Progress,
 } from '@heroui/react';
@@ -136,41 +135,57 @@ export default function DualInputForm({
           }
         >
           <Card className="mt-4">
-            <CardBody className="space-y-4 p-6">
+            <CardBody className="p-6">
+              {/* Textarea Section */}
               <div className="space-y-2">
-                <label className="text-sm font-medium text-gray-700">
+                <label htmlFor="textContent" className="block text-sm font-medium text-gray-700">
                   Clinical Note Text
                 </label>
                 <Controller
                   name="textContent"
                   control={control}
                   render={({ field }) => (
-                    <Textarea
+                    <textarea
                       {...field}
+                      id="textContent"
+                      name="textContent"
                       placeholder="Paste your clinical note here..."
-                      variant="bordered"
-                      minRows={15}
-                      maxRows={30}
-                      isInvalid={!!errors.textContent}
-                      errorMessage={errors.textContent?.message}
-                      classNames={{
-                        input: 'resize-y',
-                      }}
+                      rows={15}
+                      className={`
+                        w-full px-3 py-2
+                        border-2 rounded-lg
+                        resize-y
+                        font-sans text-base
+                        placeholder:text-gray-400
+                        focus:outline-none focus:ring-2 focus:ring-offset-0
+                        transition-colors
+                        ${errors.textContent
+                          ? 'border-red-500 focus:border-red-500 focus:ring-red-200'
+                          : 'border-gray-300 focus:border-blue-500 focus:ring-blue-200'
+                        }
+                      `}
                     />
                   )}
                 />
+                {errors.textContent && (
+                  <p className="text-sm text-red-600">{errors.textContent.message}</p>
+                )}
               </div>
+            </CardBody>
+          </Card>
 
-              {/* Character Counter */}
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Character count</span>
+          {/* Character Counter - Completely separate card */}
+          <Card className="mt-4">
+            <CardBody className="p-4">
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600">Character count</span>
                   <span
-                    className={
+                    className={`text-sm font-medium ${
                       characterCount > MAX_TEXT_LENGTH
-                        ? 'text-danger font-medium'
+                        ? 'text-red-600'
                         : 'text-gray-900'
-                    }
+                    }`}
                   >
                     {characterCount.toLocaleString()} / {MAX_TEXT_LENGTH.toLocaleString()}
                   </span>
@@ -179,9 +194,6 @@ export default function DualInputForm({
                   value={Math.min(progressPercentage, 100)}
                   color={characterCount > MAX_TEXT_LENGTH ? 'danger' : 'primary'}
                   size="sm"
-                  classNames={{
-                    base: 'max-w-full',
-                  }}
                 />
                 <p className="text-xs text-gray-500">
                   Maximum {MAX_TEXT_LENGTH.toLocaleString()} characters
