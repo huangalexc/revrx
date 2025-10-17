@@ -2,10 +2,12 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import DualInputForm from '@/components/forms/DualInputForm';
 import FileUpload from '@/components/upload/FileUpload';
 import apiClient from '@/lib/api/client';
 import { API_ENDPOINTS } from '@/lib/api/endpoints';
-import { Upload, FileText, Clock, CheckCircle } from 'lucide-react';
+import { FileText, Clock, CheckCircle } from 'lucide-react';
+import type { EncounterInputFormData } from '@/lib/schemas/encounter-input';
 
 interface UploadStep {
   id: string;
@@ -15,23 +17,12 @@ interface UploadStep {
 
 export default function EncountersPage() {
   const router = useRouter();
-  const [clinicalNote, setClinicalNote] = useState<File | null>(null);
   const [billingCodes, setBillingCodes] = useState<File | null>(null);
-
-  const handleClinicalNoteSelect = (file: File) => {
-    console.log('File selected:', file);
-    console.log('File type:', typeof file);
-    console.log('Is File?', file instanceof File);
-    console.log('File name:', file.name);
-    console.log('File size:', file.size);
-    setClinicalNote(file);
-  };
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [encounterId, setEncounterId] = useState<string | null>(null);
   const [uploadSteps, setUploadSteps] = useState<UploadStep[]>([
-    { id: 'note', label: 'Upload clinical note', status: 'pending' },
-    { id: 'extract', label: 'Extract text', status: 'pending' },
+    { id: 'note', label: 'Process clinical note', status: 'pending' },
+    { id: 'extract', label: 'Extract/Validate text', status: 'pending' },
     { id: 'codes', label: 'Upload billing codes (optional)', status: 'pending' },
     { id: 'complete', label: 'Ready for processing', status: 'pending' },
   ]);
@@ -45,31 +36,27 @@ export default function EncountersPage() {
     );
   };
 
-  const handleClinicalNoteUpload = async () => {
-    if (!clinicalNote) return;
-
+  const handleEncounterSubmit = async (data: EncounterInputFormData) => {
     setIsUploading(true);
     setError(null);
 
     try {
-      // Step 1: Upload clinical note
+      // Step 1: Upload clinical note (text or file)
       updateStepStatus('note', 'active');
 
-      console.log('Before FormData - clinicalNote:', clinicalNote);
-      console.log('Before FormData - clinicalNote instanceof File:', clinicalNote instanceof File);
-      console.log('Before FormData - clinicalNote.name:', clinicalNote.name);
-
       const formData = new FormData();
-      formData.append('file', clinicalNote);
 
-      console.log('After FormData - formData has file:', formData.has('file'));
-      console.log('After FormData - formData.get(file):', formData.get('file'));
+      if (data.inputMethod === 'text' && data.textContent) {
+        // Text input
+        formData.append('text_content', data.textContent);
+      } else if (data.inputMethod === 'file' && data.file) {
+        // File input
+        const file = Array.isArray(data.file) ? data.file[0] : data.file;
+        formData.append('file', file);
+      }
 
       // Get token from localStorage
       const token = localStorage.getItem('auth_token');
-      console.log('Upload - Token available:', !!token);
-      console.log('Upload - Token preview:', token ? token.substring(0, 20) + '...' : 'NULL');
-      console.log('Upload - All localStorage keys:', Object.keys(localStorage));
 
       const response = await apiClient.post(
         API_ENDPOINTS.ENCOUNTERS.UPLOAD_NOTE,
@@ -100,14 +87,15 @@ export default function EncountersPage() {
       setTimeout(() => {
         router.push(`/reports/${encounter_id}`);
       }, 2000);
-    } catch (err: any) {
+    } catch (err) {
       updateStepStatus('note', 'error');
-      const errorDetail = err.response?.data?.detail;
+      const error = err as { response?: { data?: { detail?: string | Array<{ msg: string }> } } };
+      const errorDetail = error.response?.data?.detail;
       const errorMessage = Array.isArray(errorDetail)
-        ? errorDetail.map((e: any) => e.msg).join(', ')
+        ? errorDetail.map((e) => e.msg).join(', ')
         : typeof errorDetail === 'string'
         ? errorDetail
-        : 'Failed to upload clinical note';
+        : 'Failed to process clinical note';
       setError(errorMessage);
     } finally {
       setIsUploading(false);
@@ -129,32 +117,24 @@ export default function EncountersPage() {
       );
 
       updateStepStatus('codes', 'complete');
-    } catch (err: any) {
+    } catch (err) {
       updateStepStatus('codes', 'error');
       // Don't fail entire upload if billing codes fail
       console.error('Failed to upload billing codes:', err);
     }
   };
 
-  const canSubmit = clinicalNote !== null && !isUploading;
-
   return (
     <div className="max-w-4xl mx-auto">
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-gray-900">New Encounter</h1>
         <p className="text-gray-600 mt-2">
-          Upload clinical notes and billing codes for post-facto coding review
+          Paste clinical note text or upload a file for post-facto coding review
         </p>
       </div>
 
-      {error && (
-        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
-          <p className="text-sm text-red-800">{error}</p>
-        </div>
-      )}
-
       <div className="space-y-6">
-        {/* Clinical Note Upload */}
+        {/* Clinical Note Input - Text or File */}
         <div className="bg-white rounded-lg border border-gray-200 p-6">
           <div className="flex items-center gap-3 mb-4">
             <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
@@ -164,15 +144,14 @@ export default function EncountersPage() {
               <h2 className="text-lg font-semibold text-gray-900">
                 Clinical Note
               </h2>
-              <p className="text-sm text-gray-600">Required</p>
+              <p className="text-sm text-gray-600">Required - Text or File</p>
             </div>
           </div>
-          <FileUpload
-            onFileSelect={handleClinicalNoteSelect}
-            acceptedTypes={['.txt', '.pdf', '.docx']}
-            maxSizeMB={5}
-            label=""
-            description="TXT, PDF, or DOCX up to 5MB"
+          <DualInputForm
+            onSubmit={handleEncounterSubmit}
+            defaultMethod="text"
+            isSubmitting={isUploading}
+            error={error}
           />
         </div>
 
@@ -204,7 +183,7 @@ export default function EncountersPage() {
         {isUploading && (
           <div className="bg-white rounded-lg border border-gray-200 p-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">
-              Upload Progress
+              Processing
             </h3>
             <div className="space-y-3">
               {uploadSteps.map((step) => (
@@ -241,25 +220,6 @@ export default function EncountersPage() {
             </div>
           </div>
         )}
-
-        {/* Submit Button */}
-        <div className="flex justify-end gap-4">
-          <button
-            onClick={() => router.back()}
-            className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
-            disabled={isUploading}
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleClinicalNoteUpload}
-            disabled={!canSubmit}
-            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            <Upload className="w-5 h-5" />
-            {isUploading ? 'Uploading...' : 'Upload & Process'}
-          </button>
-        </div>
       </div>
     </div>
   );
