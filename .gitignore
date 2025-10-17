@@ -11,6 +11,7 @@
 !.yarn/versions
 synthetic_data/*
 docs/technical/environment-variables.md
+sample_fee_schedules/*
 
 # testing
 /coverage
@@ -41,3 +42,4 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+.worktrees
