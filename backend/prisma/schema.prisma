@@ -50,6 +50,7 @@ model User {
   apiKeys           ApiKey[]
   webhooks          Webhook[]
   fhirConnections   FhirConnection[]
+  uploadedFeeSchedules FeeSchedule[] // NEW: Fee schedules uploaded by this user
 
   @@map("users")
 }
@@ -104,12 +105,16 @@ model Encounter {
   errorMessage      String?  @map("error_message")
   retryCount        Int      @default(0) @map("retry_count")
 
+  // Payer/insurance information (NEW)
+  payerId           String?  @map("payer_id")
+
   // Timestamps
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
   // Relations
   user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payer             Payer?   @relation(fields: [payerId], references: [id])
   uploadedFiles     UploadedFile[]
   billingCodes      BillingCode[]
   icd10Codes        ICD10Code[]
@@ -120,6 +125,7 @@ model Encounter {
   @@index([userId, createdAt])
   @@index([status])
   @@index([batchId])
+  @@index([payerId])
   @@map("encounters")
 }
 
@@ -366,8 +372,18 @@ model Report {
   // CPT suggestions from SNOMED crosswalk
   cptSuggestions    Json?    @map("cpt_suggestions") // CPT codes mapped from SNOMED via crosswalk
 
-  // Revenue analysis
+  // Revenue analysis (LEGACY - kept for backwards compatibility)
   incrementalRevenue Float   @default(0) @map("incremental_revenue")
+
+  // Payer-specific revenue analysis (NEW)
+  payerId                    String?  @map("payer_id")
+  feeScheduleId              String?  @map("fee_schedule_id")
+  billedRevenueEstimate      Float?   @map("billed_revenue_estimate")
+  suggestedRevenueEstimate   Float?   @map("suggested_revenue_estimate")
+  optimizedRevenueEstimate   Float?   @map("optimized_revenue_estimate")
+  payerDenialRisks           Json?    @map("payer_denial_risks")
+  authRequirements           Json?    @map("auth_requirements")
+  bundlingWarnings           Json?    @map("bundling_warnings")
 
   // AI processing metadata
   aiModel           String   @map("ai_model") // e.g., "gpt-4"
@@ -629,4 +645,129 @@ enum FhirAuthType {
   BASIC
   API_KEY
   SMART_ON_FHIR
+}
+
+// ============================================================================
+// PAYER FEE SCHEDULE MODELS - Insurance payer management and rate tables
+// ============================================================================
+
+// Insurance companies and payers
+model Payer {
+  id                String   @id @default(uuid())
+  name              String   // e.g., "Blue Cross Blue Shield of Texas"
+  payerCode         String?  @unique @map("payer_code") // e.g., "BCBS_TX"
+  payerType         PayerType @map("payer_type")
+
+  // Contact information
+  website           String?
+  phone             String?
+
+  // Status
+  isActive          Boolean  @default(true) @map("is_active")
+
+  // Metadata
+  notes             String?  @db.Text
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  feeSchedules      FeeSchedule[]
+  encounters        Encounter[]
+
+  @@index([name])
+  @@index([payerType])
+  @@map("payers")
+}
+
+enum PayerType {
+  COMMERCIAL
+  MEDICARE
+  MEDICAID
+  TRICARE
+  WORKERS_COMP
+  SELF_PAY
+}
+
+// Version-controlled payer-specific fee schedules
+model FeeSchedule {
+  id                String   @id @default(uuid())
+  payerId           String   @map("payer_id")
+
+  // Schedule metadata
+  name              String   // e.g., "2025 Q1 Fee Schedule"
+  description       String?  @db.Text
+
+  // Effective dates
+  effectiveDate     DateTime @map("effective_date")
+  expirationDate    DateTime? @map("expiration_date")
+
+  // Status
+  isActive          Boolean  @default(true) @map("is_active")
+
+  // Upload metadata
+  uploadedByUserId  String   @map("uploaded_by_user_id")
+  uploadedFileName  String?  @map("uploaded_file_name")
+  uploadedAt        DateTime @default(now()) @map("uploaded_at")
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  payer             Payer    @relation(fields: [payerId], references: [id], onDelete: Cascade)
+  rates             FeeScheduleRate[]
+  uploadedBy        User     @relation(fields: [uploadedByUserId], references: [id])
+
+  @@index([payerId, effectiveDate])
+  @@index([isActive])
+  @@map("fee_schedules")
+}
+
+// Individual CPT code reimbursement rates
+model FeeScheduleRate {
+  id                String   @id @default(uuid())
+  feeScheduleId     String   @map("fee_schedule_id")
+
+  // CPT code
+  cptCode           String   @map("cpt_code")
+  cptDescription    String?  @map("cpt_description") @db.Text
+
+  // Base reimbursement rates
+  allowedAmount     Float    @map("allowed_amount") // Maximum reimbursement
+  facilityRate      Float?   @map("facility_rate")
+  nonFacilityRate   Float?   @map("non_facility_rate")
+
+  // Common modifiers
+  modifier25Rate    Float?   @map("modifier_25_rate") // Significant E&M service
+  modifier59Rate    Float?   @map("modifier_59_rate") // Distinct procedural service
+  modifierTCRate    Float?   @map("modifier_tc_rate") // Technical component
+  modifierPCRate    Float?   @map("modifier_pc_rate") // Professional component
+
+  // Authorization and bundling
+  requiresAuth      Boolean  @default(false) @map("requires_auth")
+  authCriteria      String?  @map("auth_criteria") @db.Text
+  bundlingRules     Json?    @map("bundling_rules") // Complex bundling logic
+
+  // RVU data (optional)
+  workRVU           Float?   @map("work_rvu")
+  practiceRVU       Float?   @map("practice_rvu")
+  malpracticeRVU    Float?   @map("malpractice_rvu")
+  totalRVU          Float?   @map("total_rvu")
+
+  // Metadata
+  notes             String?  @db.Text
+
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  feeSchedule       FeeSchedule @relation(fields: [feeScheduleId], references: [id], onDelete: Cascade)
+
+  @@unique([feeScheduleId, cptCode])
+  @@index([cptCode])
+  @@index([allowedAmount])
+  @@map("fee_schedule_rates")
 }
