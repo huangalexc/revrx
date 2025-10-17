@@ -42,59 +42,105 @@ class BulkDeleteRequest(BaseModel):
 @router.post("/upload-note", response_model=FileUploadResponse, status_code=http_status.HTTP_201_CREATED)
 async def upload_clinical_note(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    text_content: Optional[str] = Form(None),
     batch_id: Optional[str] = Form(None),
     duplicate_handling: Optional[str] = Form(None),
     user = Depends(get_current_user)
 ):
     """
-    Upload clinical note (TXT, PDF, or DOCX)
+    Upload clinical note (TXT, PDF, DOCX file OR plain text)
 
-    - Validates file type and size
-    - Extracts text from document
-    - Stores encrypted file in S3
+    Accepts either:
+    - file: Upload file (TXT, PDF, or DOCX)
+    - text_content: Plain text content pasted directly
+
+    - Validates file type and size or text length
+    - Extracts text from document or uses provided text
+    - Stores encrypted file in S3 (if file provided)
     - Creates encounter record in database
     """
     try:
-        # Determine file type from extension
-        file_ext = file.filename.split('.')[-1].lower()
-        if file_ext not in ['txt', 'pdf', 'docx']:
+        # Validate that either file OR text_content is provided, not both or neither
+        if not file and not text_content:
             raise HTTPException(
                 status_code=400,
-                detail="Invalid file type. Supported types: TXT, PDF, DOCX"
+                detail="Either file or text_content must be provided"
             )
 
-        # Map file extension to FileType enum
-        file_type_map = {
-            'txt': FileType.TXT,
-            'pdf': FileType.PDF,
-            'docx': FileType.DOCX,
-        }
-        file_type = file_type_map[file_ext]
-
-        # Validate and read file
-        file_content, mime_type = await validate_upload_file(file, file_type)
-        file_size = len(file_content)
-
-        # Extract text from file
-        try:
-            extracted_text = extract_text(file_content, file_ext)
-        except TextExtractionError as e:
+        if file and text_content:
             raise HTTPException(
-                status_code=422,
-                detail=f"Failed to extract text from file: {str(e)}"
+                status_code=400,
+                detail="Provide either file or text_content, not both"
             )
 
-        # Validate extracted text
-        if not validate_extracted_text(extracted_text, min_length=50):
-            raise HTTPException(
-                status_code=422,
-                detail="Extracted text is too short or empty. Minimum 50 characters required."
-            )
+        # Process based on input method
+        if text_content:
+            # Direct text input path
+            extracted_text = text_content.strip()
 
-        # Compute file hash for duplicate detection
-        file_hash = compute_file_hash(file_content)
-        logger.info("File hash computed", file_hash_preview=file_hash[:16])
+            # Validate text length
+            if not validate_extracted_text(extracted_text, min_length=50):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Text content is too short. Minimum 50 characters required."
+                )
+
+            # Compute hash from text content for duplicate detection
+            file_hash = compute_file_hash(extracted_text.encode('utf-8'))
+            logger.info("Text content hash computed", file_hash_preview=file_hash[:16])
+
+            # Set file metadata for text input
+            file_ext = 'txt'
+            safe_filename = f"pasted_text_{file_hash[:8]}.txt"
+            file_size = len(extracted_text.encode('utf-8'))
+            mime_type = 'text/plain'
+            file_key = None  # No S3 upload for text input
+
+        else:
+            # File upload path
+            # Determine file type from extension
+            file_ext = file.filename.split('.')[-1].lower()
+            if file_ext not in ['txt', 'pdf', 'docx']:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid file type. Supported types: TXT, PDF, DOCX"
+                )
+
+            # Map file extension to FileType enum
+            file_type_map = {
+                'txt': FileType.TXT,
+                'pdf': FileType.PDF,
+                'docx': FileType.DOCX,
+            }
+            file_type = file_type_map[file_ext]
+
+            # Validate and read file
+            file_content, mime_type = await validate_upload_file(file, file_type)
+            file_size = len(file_content)
+
+            # Extract text from file
+            try:
+                extracted_text = extract_text(file_content, file_ext)
+            except TextExtractionError as e:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Failed to extract text from file: {str(e)}"
+                )
+
+            # Validate extracted text
+            if not validate_extracted_text(extracted_text, min_length=50):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Extracted text is too short or empty. Minimum 50 characters required."
+                )
+
+            # Compute file hash for duplicate detection
+            file_hash = compute_file_hash(file_content)
+            logger.info("File hash computed", file_hash_preview=file_hash[:16])
+
+            # Sanitize filename
+            safe_filename = sanitize_filename(file.filename)
 
         # Create encounter record in database with batch_id if provided
         encounter_data = {
@@ -106,29 +152,30 @@ async def upload_clinical_note(
 
         encounter = await prisma.encounter.create(data=encounter_data)
 
-        # Sanitize filename
-        safe_filename = sanitize_filename(file.filename)
+        # Upload raw file to S3 only if file was provided (not text input)
+        if file:
+            file_key = storage_service.get_file_key(user.id, encounter.id, safe_filename)
 
-        # Upload raw file to S3 (skip for local dev if S3 not configured)
-        file_key = storage_service.get_file_key(user.id, encounter.id, safe_filename)
-
-        try:
-            await storage_service.upload_file(
-                file_obj=io.BytesIO(file_content),
-                key=file_key,
-                content_type=mime_type,
-                metadata={
-                    'user_id': user.id,
-                    'encounter_id': encounter.id,
-                    'original_filename': file.filename,
-                    'file_type': file_ext,
-                }
-            )
-            logger.info("File uploaded to S3 successfully", file_key=file_key)
-        except Exception as e:
-            # For local dev, continue without S3 storage
-            logger.warning("S3 upload skipped (local dev mode)", error=str(e))
-            file_key = f"local://{user.id}/{encounter.id}/{safe_filename}"
+            try:
+                await storage_service.upload_file(
+                    file_obj=io.BytesIO(file_content),
+                    key=file_key,
+                    content_type=mime_type,
+                    metadata={
+                        'user_id': user.id,
+                        'encounter_id': encounter.id,
+                        'original_filename': file.filename,
+                        'file_type': file_ext,
+                    }
+                )
+                logger.info("File uploaded to S3 successfully", file_key=file_key)
+            except Exception as e:
+                # For local dev, continue without S3 storage
+                logger.warning("S3 upload skipped (local dev mode)", error=str(e))
+                file_key = f"local://{user.id}/{encounter.id}/{safe_filename}"
+        else:
+            # Text input - no S3 upload
+            file_key = f"text://{user.id}/{encounter.id}/{safe_filename}"
 
         # Map file extension to Prisma FileType enum value
         prisma_file_type_map = {
@@ -162,10 +209,12 @@ async def upload_clinical_note(
         # 6. Update encounter status to COMPLETED
         background_tasks.add_task(process_encounter_phi, encounter.id)
 
+        input_method = "text_paste" if text_content else "file_upload"
         logger.info(
-            "Clinical note uploaded successfully, PHI processing queued",
+            "Clinical note processed successfully, PHI processing queued",
             encounter_id=encounter.id,
             user_id=user.id,
+            input_method=input_method,
             file_size=file_size,
             text_length=len(extracted_text)
         )
@@ -175,7 +224,7 @@ async def upload_clinical_note(
             file_name=safe_filename,
             file_size=file_size,
             status="success",
-            message="Clinical note uploaded successfully. Processing will begin shortly."
+            message=f"Clinical note {'processed' if text_content else 'uploaded'} successfully. Processing will begin shortly."
         )
 
     except HTTPException:
