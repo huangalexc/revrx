@@ -440,6 +440,67 @@ async def process_encounter_phi(encounter_id: str) -> None:
                 error=str(e)
             )
 
+        # Step 6.46: Fee schedule lookup for CPT optimization (NEW)
+        logger.info("Looking up fee schedule rates", encounter_id=encounter_id)
+
+        revenue_analysis = None
+        try:
+            if encounter.payerId and cpt_suggestions_from_crosswalk:
+                from app.services.fee_schedule_service import get_fee_schedule_service
+
+                fee_schedule_service = await get_fee_schedule_service(prisma)
+
+                # Extract CPT codes from crosswalk suggestions
+                suggested_cpt_codes = [s['cpt_code'] for s in cpt_suggestions_from_crosswalk]
+
+                # Batch lookup rates
+                rates = await fee_schedule_service.get_rates_batch(
+                    cpt_codes=suggested_cpt_codes,
+                    payer_id=encounter.payerId
+                )
+
+                # Enhance crosswalk suggestions with reimbursement rates
+                for suggestion in cpt_suggestions_from_crosswalk:
+                    rate = rates.get(suggestion['cpt_code'])
+                    if rate:
+                        suggestion['allowed_amount'] = rate.allowed_amount
+                        suggestion['estimated_reimbursement'] = rate.non_facility_rate or rate.allowed_amount
+                        suggestion['requires_auth'] = rate.requires_auth
+                        suggestion['auth_criteria'] = rate.auth_criteria
+                        suggestion['payer_name'] = rate.payer_name
+
+                # Calculate total revenue estimate
+                revenue_analysis = await fee_schedule_service.calculate_revenue_estimate(
+                    code_suggestions=[{'code': s['cpt_code'], 'code_type': 'CPT'} for s in cpt_suggestions_from_crosswalk],
+                    payer_id=encounter.payerId
+                )
+
+                logger.info(
+                    "Fee schedule lookup completed",
+                    encounter_id=encounter_id,
+                    payer_id=encounter.payerId,
+                    total_revenue_estimate=revenue_analysis['total_revenue'],
+                    codes_with_rates=sum(1 for r in rates.values() if r is not None)
+                )
+
+                # Log fee schedule metrics
+                metrics = fee_schedule_service.get_metrics()
+                logger.info("fee_schedule_service_metrics", encounter_id=encounter_id, **metrics)
+            else:
+                logger.info(
+                    "Skipping fee schedule lookup",
+                    encounter_id=encounter_id,
+                    has_payer=bool(encounter.payerId),
+                    has_cpt_suggestions=bool(cpt_suggestions_from_crosswalk)
+                )
+
+        except Exception as e:
+            logger.warning(
+                "Failed to perform fee schedule lookup",
+                encounter_id=encounter_id,
+                error=str(e)
+            )
+
         # Step 6.5: Filter ICD-10 codes using diagnosis entities
         logger.info("Filtering ICD-10 codes using diagnosis entities", encounter_id=encounter_id)
 
