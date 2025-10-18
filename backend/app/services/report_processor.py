@@ -288,6 +288,50 @@ async def process_report_async(report_id: str, max_retries: int = 3) -> None:
         # ================================================================
         await update_report_progress(report_id, 80, "ai_coding_analysis")
 
+        # NEW: Get payer-specific fee schedule rates before AI analysis
+        payer_rates = {}
+        payer_id = encounter.payerId
+
+        if payer_id:
+            try:
+                from app.services.fee_schedule_service import get_fee_schedule_service
+
+                fee_schedule_service = await get_fee_schedule_service(prisma)
+
+                # Get all CPT codes that might be suggested
+                all_cpt_codes = []
+
+                # Add codes from SNOMED crosswalk
+                if snomed_cpt_for_llm:
+                    all_cpt_codes.extend([s['cpt_code'] for s in snomed_cpt_for_llm])
+
+                # Add codes from billed codes
+                all_cpt_codes.extend([c['code'] for c in billed_codes_for_llm if c['code_type'] == 'CPT'])
+
+                # Deduplicate
+                all_cpt_codes = list(set(all_cpt_codes))
+
+                if all_cpt_codes:
+                    # Batch lookup rates
+                    payer_rates = await fee_schedule_service.get_rates_batch(
+                        cpt_codes=all_cpt_codes,
+                        payer_id=payer_id
+                    )
+
+                    logger.info(
+                        "Payer rates loaded for AI analysis",
+                        report_id=report_id,
+                        payer_id=payer_id,
+                        total_codes=len(all_cpt_codes),
+                        rates_found=sum(1 for r in payer_rates.values() if r is not None)
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Failed to load payer rates",
+                    report_id=report_id,
+                    error=str(e)
+                )
+
         # Use 2-prompt approach for reliability with timeout protection
         # AI analysis fails completely if this times out (not optional)
         try:
@@ -297,7 +341,8 @@ async def process_report_async(report_id: str, max_retries: int = 3) -> None:
                     billed_codes=billed_codes_for_llm,
                     extracted_icd10_codes=extracted_icd10_for_llm,
                     snomed_to_cpt_suggestions=snomed_cpt_for_llm,
-                    encounter_type=encounter_type
+                    encounter_type=encounter_type,
+                    payer_rates=payer_rates if payer_rates else None
                 ),
                 timeout=OPENAI_TIMEOUT
             )
@@ -319,6 +364,122 @@ async def process_report_async(report_id: str, max_retries: int = 3) -> None:
             "AI quality analysis complete",
             report_id=report_id
         )
+
+        # ================================================================
+        # STEP 5.5: PAYER-SPECIFIC REVENUE BREAKDOWN (NEW)
+        # ================================================================
+        billed_revenue_estimate = 0.0
+        suggested_revenue_estimate = 0.0
+        optimized_revenue_estimate = 0.0
+        auth_requirements = []
+        denial_risks = []
+        bundling_warnings = []
+
+        if payer_id and payer_rates:
+            try:
+                logger.info(
+                    "Calculating payer-specific revenue breakdown",
+                    report_id=report_id,
+                    payer_id=payer_id
+                )
+
+                # Calculate revenue for billed codes
+                for billed_code in coding_result.billed_codes:
+                    if billed_code.code_type == 'CPT':
+                        rate = payer_rates.get(billed_code.code)
+                        if rate:
+                            # Use non-facility rate as primary, fall back to allowed amount
+                            reimbursement = rate.non_facility_rate or rate.allowed_amount
+                            billed_revenue_estimate += reimbursement
+
+                            # Track authorization requirements
+                            if rate.requires_auth:
+                                auth_requirements.append({
+                                    'code': billed_code.code,
+                                    'description': billed_code.description,
+                                    'criteria': rate.auth_criteria,
+                                    'code_type': 'billed'
+                                })
+
+                # Calculate revenue for suggested codes (missing/additional codes from AI)
+                for suggested_code in coding_result.suggested_codes:
+                    if suggested_code.code_type == 'CPT':
+                        rate = payer_rates.get(suggested_code.code)
+                        if rate:
+                            reimbursement = rate.non_facility_rate or rate.allowed_amount
+                            suggested_revenue_estimate += reimbursement
+
+                            # Track authorization requirements
+                            if rate.requires_auth:
+                                auth_requirements.append({
+                                    'code': suggested_code.code,
+                                    'description': suggested_code.description,
+                                    'criteria': rate.auth_criteria,
+                                    'code_type': 'suggested',
+                                    'reasoning': suggested_code.reasoning
+                                })
+
+                # Calculate revenue for additional codes (upgrade opportunities)
+                for additional_code in coding_result.additional_codes:
+                    if additional_code.code_type == 'CPT':
+                        rate = payer_rates.get(additional_code.code)
+                        if rate:
+                            reimbursement = rate.non_facility_rate or rate.allowed_amount
+                            optimized_revenue_estimate += reimbursement
+
+                            # Track authorization requirements
+                            if rate.requires_auth:
+                                auth_requirements.append({
+                                    'code': additional_code.code,
+                                    'description': additional_code.description,
+                                    'criteria': rate.auth_criteria,
+                                    'code_type': 'additional',
+                                    'reasoning': additional_code.reasoning
+                                })
+
+                # Analyze denial risks
+                # Check for codes without rates (payer may not cover)
+                all_suggested_cpt = [c.code for c in coding_result.suggested_codes if c.code_type == 'CPT']
+                all_suggested_cpt.extend([c.code for c in coding_result.additional_codes if c.code_type == 'CPT'])
+
+                for code in all_suggested_cpt:
+                    if code not in payer_rates or payer_rates[code] is None:
+                        denial_risks.append({
+                            'code': code,
+                            'risk_type': 'no_rate_on_file',
+                            'message': f'No reimbursement rate found for code {code}',
+                            'severity': 'high'
+                        })
+
+                # Identify potential bundling issues
+                # Note: Full NCCI edit checking is a future enhancement
+                # For now, flag codes that may have bundling concerns based on rate data
+                for code in all_suggested_cpt:
+                    rate = payer_rates.get(code)
+                    if rate and rate.bundling_rules:
+                        bundling_warnings.append({
+                            'code': code,
+                            'warning': 'Bundling rules may apply',
+                            'rules': rate.bundling_rules
+                        })
+
+                logger.info(
+                    "Revenue breakdown calculated",
+                    report_id=report_id,
+                    billed_revenue=billed_revenue_estimate,
+                    suggested_revenue=suggested_revenue_estimate,
+                    optimized_revenue=optimized_revenue_estimate,
+                    auth_requirements_count=len(auth_requirements),
+                    denial_risks_count=len(denial_risks)
+                )
+
+            except Exception as e:
+                logger.warning(
+                    "Failed to calculate revenue breakdown",
+                    report_id=report_id,
+                    error=str(e)
+                )
+                # Non-critical, continue with report finalization
 
         # ================================================================
         # STEP 6: FINALIZE REPORT (90-100%)
@@ -371,31 +532,65 @@ async def process_report_async(report_id: str, max_retries: int = 3) -> None:
         # Update report with complete results
         from prisma import Json
 
+        # Prepare update data with base fields
+        update_data = {
+            "status": enums.ReportStatus.COMPLETE,
+            "processingCompletedAt": datetime.now(),
+            "processingTimeMs": processing_time_ms,
+            "progressPercent": 100,
+            "currentStep": "complete",
+            "suggestedCodes": Json(suggested_codes_json),
+            "billedCodes": Json(billed_codes_json),
+            "extractedIcd10Codes": Json(extracted_icd10_json),
+            "extractedSnomedCodes": Json(extracted_snomed_json),
+            "incrementalRevenue": coding_result.total_incremental_revenue,
+            "aiModel": coding_result.model_used,
+            "confidenceScore": None,  # Can calculate average confidence if needed
+        }
+
+        # Add payer-specific revenue fields if available
+        if payer_id:
+            update_data["payerId"] = payer_id
+
+        if payer_rates:
+            update_data["billedRevenueEstimate"] = billed_revenue_estimate
+            update_data["suggestedRevenueEstimate"] = suggested_revenue_estimate
+            update_data["optimizedRevenueEstimate"] = optimized_revenue_estimate
+
+            # Store authorization requirements, denial risks, and bundling warnings as JSON
+            if auth_requirements:
+                update_data["authRequirements"] = Json(auth_requirements)
+            if denial_risks:
+                update_data["payerDenialRisks"] = Json(denial_risks)
+            if bundling_warnings:
+                update_data["bundlingWarnings"] = Json(bundling_warnings)
+
         await prisma.report.update(
             where={"id": report_id},
-            data={
-                "status": enums.ReportStatus.COMPLETE,
-                "processingCompletedAt": datetime.now(),
-                "processingTimeMs": processing_time_ms,
-                "progressPercent": 100,
-                "currentStep": "complete",
-                "suggestedCodes": Json(suggested_codes_json),
-                "billedCodes": Json(billed_codes_json),
-                "extractedIcd10Codes": Json(extracted_icd10_json),
-                "extractedSnomedCodes": Json(extracted_snomed_json),
-                "incrementalRevenue": coding_result.total_incremental_revenue,
-                "aiModel": coding_result.model_used,
-                "confidenceScore": None,  # Can calculate average confidence if needed
-            }
+            data=update_data
         )
 
-        logger.info(
-            "Report processing completed successfully",
-            report_id=report_id,
-            processing_time_ms=processing_time_ms,
-            suggested_codes_count=len(coding_result.suggested_codes),
-            incremental_revenue=coding_result.total_incremental_revenue
-        )
+        # Build comprehensive success log
+        log_data = {
+            "report_id": report_id,
+            "processing_time_ms": processing_time_ms,
+            "suggested_codes_count": len(coding_result.suggested_codes),
+            "incremental_revenue": coding_result.total_incremental_revenue
+        }
+
+        # Add payer-specific metrics if available
+        if payer_rates:
+            log_data.update({
+                "billed_revenue": billed_revenue_estimate,
+                "suggested_revenue": suggested_revenue_estimate,
+                "optimized_revenue": optimized_revenue_estimate,
+                "total_revenue_opportunity": billed_revenue_estimate + suggested_revenue_estimate + optimized_revenue_estimate,
+                "auth_requirements_count": len(auth_requirements),
+                "denial_risks_count": len(denial_risks),
+                "bundling_warnings_count": len(bundling_warnings)
+            })
+
+        logger.info("Report processing completed successfully", **log_data)
 
     except Exception as e:
         # Handle errors

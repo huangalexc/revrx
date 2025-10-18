@@ -491,7 +491,8 @@ IMPORTANT - Billed Codes Extraction:
         billed_codes: List[Dict[str, str]],
         extracted_icd10_codes: List[Dict[str, any]] = None,
         snomed_to_cpt_suggestions: List[Dict[str, any]] = None,
-        encounter_type: str = None
+        encounter_type: str = None,
+        payer_rates: Dict[str, Any] = None
     ) -> CodingSuggestionResult:
         """
         2-Prompt approach for medical coding analysis
@@ -510,6 +511,7 @@ IMPORTANT - Billed Codes Extraction:
             extracted_icd10_codes: Filtered ICD-10 codes from AWS Comprehend
             snomed_to_cpt_suggestions: CPT codes from SNOMED crosswalk
             encounter_type: Type of encounter
+            payer_rates: Optional dict mapping CPT codes to CPTRate objects with reimbursement info
 
         Returns:
             CodingSuggestionResult with complete analysis
@@ -548,7 +550,8 @@ IMPORTANT - Billed Codes Extraction:
                         billed_codes,
                         extracted_icd10_codes,
                         snomed_to_cpt_suggestions,
-                        encounter_type
+                        encounter_type,
+                        payer_rates
                     ),
                 },
             ]
@@ -591,7 +594,8 @@ IMPORTANT - Billed Codes Extraction:
                         result_p1.get("billed_codes", []),
                         result_p1.get("suggested_codes", []),
                         result_p1.get("additional_codes", []),
-                        encounter_type
+                        encounter_type,
+                        payer_rates
                     ),
                 },
             ]

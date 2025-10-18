@@ -40,12 +40,15 @@ async def db() -> AsyncGenerator:
     await prisma.connect()
     yield prisma
 
-    # Clean up test data
+    # Clean up test data (order matters for foreign key constraints)
     await prisma.auditlog.delete_many()
     await prisma.report.delete_many()
     await prisma.phimapping.delete_many()
     await prisma.uploadedfile.delete_many()
+    await prisma.feeschedulerate.delete_many()
+    await prisma.feeschedule.delete_many()
     await prisma.encounter.delete_many()
+    await prisma.payer.delete_many()
     await prisma.subscription.delete_many()
     await prisma.token.delete_many()
     await prisma.user.delete_many()
@@ -468,3 +471,189 @@ def assert_audit_log():
         return log
 
     return _assert
+
+
+# ============================================================================
+# Payer and Fee Schedule fixtures
+# ============================================================================
+
+@pytest.fixture
+async def test_payer(db) -> dict:
+    """Create a test payer"""
+    from prisma.enums import PayerType
+
+    payer = await prisma.payer.create(
+        data={
+            "name": "Blue Cross Blue Shield",
+            "payerCode": "BCBS",
+            "payerType": PayerType.COMMERCIAL,
+            "website": "https://www.bcbs.com",
+            "phone": "(800) 123-4567",
+            "isActive": True,
+        }
+    )
+
+    return {
+        "payer_id": payer.id,
+        "payer_name": payer.name,
+        "payer_code": payer.payerCode,
+        "payer": payer,
+    }
+
+
+@pytest.fixture
+async def test_payer_with_schedule(db, test_user) -> dict:
+    """Create a test payer with active fee schedule"""
+    from prisma.enums import PayerType
+    from datetime import datetime, timedelta
+
+    payer = await prisma.payer.create(
+        data={
+            "name": "Blue Cross Blue Shield",
+            "payerCode": "BCBS",
+            "payerType": PayerType.COMMERCIAL,
+            "isActive": True,
+        }
+    )
+
+    fee_schedule = await prisma.feeschedule.create(
+        data={
+            "payerId": payer.id,
+            "name": "2025 Q1 Fee Schedule",
+            "description": "Test fee schedule for Q1 2025",
+            "effectiveDate": datetime.now() - timedelta(days=30),
+            "expirationDate": datetime.now() + timedelta(days=60),
+            "isActive": True,
+            "uploadedByUserId": test_user["id"],
+            "uploadedFileName": "test_schedule.csv",
+        }
+    )
+
+    # Create some sample rates
+    rates_data = [
+        {
+            "feeScheduleId": fee_schedule.id,
+            "cptCode": "99213",
+            "cptDescription": "Office visit - established patient, low complexity",
+            "allowedAmount": 75.50,
+            "facilityRate": 70.00,
+            "nonFacilityRate": 75.50,
+            "requiresAuth": False,
+            "workRVU": 1.3,
+            "totalRVU": 2.1,
+        },
+        {
+            "feeScheduleId": fee_schedule.id,
+            "cptCode": "99214",
+            "cptDescription": "Office visit - established patient, moderate complexity",
+            "allowedAmount": 110.25,
+            "facilityRate": 105.00,
+            "nonFacilityRate": 110.25,
+            "requiresAuth": False,
+            "workRVU": 1.92,
+            "totalRVU": 3.2,
+        },
+        {
+            "feeScheduleId": fee_schedule.id,
+            "cptCode": "99215",
+            "cptDescription": "Office visit - established patient, high complexity",
+            "allowedAmount": 148.33,
+            "facilityRate": 140.00,
+            "nonFacilityRate": 148.33,
+            "requiresAuth": False,
+            "workRVU": 2.8,
+            "totalRVU": 4.5,
+        },
+        {
+            "feeScheduleId": fee_schedule.id,
+            "cptCode": "45378",
+            "cptDescription": "Colonoscopy - diagnostic",
+            "allowedAmount": 550.00,
+            "facilityRate": 550.00,
+            "nonFacilityRate": 550.00,
+            "requiresAuth": True,
+            "authCriteria": "Prior authorization required for all non-emergent procedures",
+            "workRVU": 4.5,
+            "totalRVU": 7.2,
+        },
+    ]
+
+    await prisma.feeschedulerate.create_many(data=rates_data)
+
+    return {
+        "payer_id": payer.id,
+        "payer_name": payer.name,
+        "fee_schedule_id": fee_schedule.id,
+        "payer": payer,
+        "fee_schedule": fee_schedule,
+    }
+
+
+@pytest.fixture
+async def test_payer_no_schedule(db) -> dict:
+    """Create a test payer without fee schedule"""
+    from prisma.enums import PayerType
+
+    payer = await prisma.payer.create(
+        data={
+            "name": "Aetna",
+            "payerCode": "AETNA",
+            "payerType": PayerType.COMMERCIAL,
+            "isActive": True,
+        }
+    )
+
+    return {
+        "payer_id": payer.id,
+        "payer_name": payer.name,
+        "payer": payer,
+    }
+
+
+@pytest.fixture
+async def test_payer_expired_schedule(db, test_user) -> dict:
+    """Create a test payer with expired fee schedule"""
+    from prisma.enums import PayerType
+    from datetime import datetime, timedelta
+
+    payer = await prisma.payer.create(
+        data={
+            "name": "UnitedHealthcare",
+            "payerCode": "UHC",
+            "payerType": PayerType.COMMERCIAL,
+            "isActive": True,
+        }
+    )
+
+    # Create expired schedule
+    fee_schedule = await prisma.feeschedule.create(
+        data={
+            "payerId": payer.id,
+            "name": "2024 Expired Schedule",
+            "effectiveDate": datetime.now() - timedelta(days=180),
+            "expirationDate": datetime.now() - timedelta(days=30),
+            "isActive": False,
+            "uploadedByUserId": test_user["id"],
+            "uploadedFileName": "expired_schedule.csv",
+        }
+    )
+
+    return {
+        "payer_id": payer.id,
+        "payer_name": payer.name,
+        "fee_schedule_id": fee_schedule.id,
+        "payer": payer,
+        "fee_schedule": fee_schedule,
+    }
+
+
+@pytest.fixture
+def sample_fee_schedule_csv() -> str:
+    """Sample fee schedule CSV content"""
+    return """cpt_code,description,allowed_amount,facility_rate,non_facility_rate,requires_auth,auth_criteria,work_rvu,total_rvu
+99213,Office visit - established patient low complexity,75.50,70.00,75.50,false,,1.3,2.1
+99214,Office visit - established patient moderate complexity,110.25,105.00,110.25,false,,1.92,3.2
+99215,Office visit - established patient high complexity,148.33,140.00,148.33,false,,2.8,4.5
+45378,Colonoscopy diagnostic,550.00,550.00,550.00,true,Prior authorization required for all non-emergent procedures,4.5,7.2
+93000,Electrocardiogram routine ECG with interpretation,12.50,12.50,12.50,false,,0.18,0.45
+"""

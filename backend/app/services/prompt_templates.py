@@ -91,7 +91,8 @@ Return your response as a JSON object with this structure:
         billed_codes: List[Dict[str, str]],
         extracted_icd10_codes: List[Dict[str, any]] = None,
         snomed_to_cpt_suggestions: List[Dict[str, any]] = None,
-        encounter_type: str = None
+        encounter_type: str = None,
+        payer_rates: Dict[str, any] = None
     ) -> str:
         """User prompt for Prompt 1: Code identification"""
 
@@ -112,6 +113,24 @@ Return your response as a JSON object with this structure:
 
         encounter_info = f"Encounter Type: {encounter_type}" if encounter_type else "Encounter Type: Not determined"
 
+        # Build payer rate context if available
+        payer_context = ""
+        if payer_rates:
+            # Extract payer name from first rate
+            payer_name = None
+            rate_details = []
+            for code, rate in payer_rates.items():
+                if rate:
+                    if not payer_name:
+                        payer_name = rate.payer_name
+                    reimbursement = rate.non_facility_rate or rate.allowed_amount
+                    auth_status = " [AUTH REQUIRED]" if rate.requires_auth else ""
+                    rate_details.append(f"  - CPT {code}: ${reimbursement:.2f}{auth_status}")
+
+            if rate_details:
+                payer_context = f"\n\nPAYER REIMBURSEMENT RATES ({payer_name}):\n" + "\n".join(rate_details)
+                payer_context += "\n\nNOTE: When suggesting codes, consider reimbursement rates to maximize appropriate revenue capture. Prioritize codes with higher reimbursement when clinically appropriate and documented."
+
         return f"""Analyze this clinical encounter and identify appropriate billing codes.
 
 {encounter_info}
@@ -123,7 +142,7 @@ EXTRACTED ICD-10 CODES (from AWS Comprehend Medical):
 {icd10_str}
 
 SUGGESTED CPT CODES (from SNOMED crosswalk):
-{snomed_cpt_str}
+{snomed_cpt_str}{payer_context}
 
 CLINICAL NOTE (de-identified, filtered for billing):
 {clinical_note}
@@ -143,7 +162,8 @@ IMPORTANT:
 - Only suggest codes with clear documentation support
 - Include confidence_reason for each suggestion
 - Don't suggest codes already in billed_codes
-- Focus on billable services with medical necessity"""
+- Focus on billable services with medical necessity
+- When payer rates are available, prioritize codes with higher reimbursement (if clinically appropriate)"""
 
     # ========================================================================
     # PROMPT 2: QUALITY & COMPLIANCE ANALYSIS
@@ -235,7 +255,8 @@ Return your response as a JSON object with this structure:
         billed_codes: List[Dict[str, str]],
         suggested_codes: List[Dict[str, any]],
         additional_codes: List[Dict[str, any]],
-        encounter_type: str = None
+        encounter_type: str = None,
+        payer_rates: Dict[str, any] = None
     ) -> str:
         """User prompt for Prompt 2: Quality and compliance analysis"""
 
@@ -256,6 +277,34 @@ Return your response as a JSON object with this structure:
              for c in additional_codes]
         ) or "None"
 
+        # Build payer-specific context
+        payer_context = ""
+        if payer_rates:
+            payer_name = None
+            auth_requirements = []
+            rate_details = []
+
+            for code, rate in payer_rates.items():
+                if rate:
+                    if not payer_name:
+                        payer_name = rate.payer_name
+                    reimbursement = rate.non_facility_rate or rate.allowed_amount
+                    rate_details.append(f"  - CPT {code}: ${reimbursement:.2f}")
+
+                    if rate.requires_auth:
+                        auth_req = f"  - CPT {code}: {rate.auth_criteria or 'Prior authorization required'}"
+                        auth_requirements.append(auth_req)
+
+            if payer_name:
+                payer_context = f"\n\nPAYER-SPECIFIC INFORMATION ({payer_name}):"
+
+            if rate_details:
+                payer_context += "\n\nReimbursement Rates:\n" + "\n".join(rate_details)
+
+            if auth_requirements:
+                payer_context += "\n\nAuthorization Requirements:\n" + "\n".join(auth_requirements)
+                payer_context += "\n\nNOTE: Codes requiring prior authorization have higher denial risk if auth is not obtained before service date."
+
         return f"""Analyze the quality and compliance of these billing codes.
 
 {encounter_info}
@@ -267,7 +316,7 @@ SUGGESTED CODES (from coding analysis):
 {suggested_str}
 
 ADDITIONAL CODES (alternatives):
-{additional_str}
+{additional_str}{payer_context}
 
 CLINICAL NOTE (de-identified):
 {clinical_note}
@@ -284,12 +333,14 @@ TASKS:
    - Assess if documentation addresses these risks
    - Assign risk level (Low/Medium/High)
    - Provide mitigation recommendations
+   - If payer-specific authorization requirements are provided, flag codes requiring prior auth with HIGH denial risk
 
 3. **RVU Analysis**: Calculate work RVUs using 2024 Medicare values:
    - Total RVUs for billed codes
    - Total RVUs for suggested codes
    - Incremental RVU opportunity
    - Provide code-level breakdown
+   - If payer rates are available, also calculate total reimbursement amounts
 
 4. **Modifier Recommendations**: Identify codes needing modifiers:
    - Common: -25 (separate E/M), -59 (distinct service), -76/-77 (repeat procedure), -95 (telemedicine)
@@ -301,7 +352,7 @@ TASKS:
    - Documentation quality score (0.0-1.0)
    - Compliance flags (if any)
 
-Focus on practical, actionable guidance to improve coding accuracy and reduce denial risk."""
+Focus on practical, actionable guidance to improve coding accuracy and reduce denial risk. When payer-specific information is available, prioritize payer-specific denial risks and authorization requirements."""
 
 
 # Export singleton
